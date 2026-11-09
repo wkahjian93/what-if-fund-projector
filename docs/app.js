@@ -1,0 +1,378 @@
+/* What-If Fund Projector: screens. */
+(function () {
+  'use strict';
+  const CFG = window.WIF_CONFIG || {};
+  const $ = (s, el) => (el || document).querySelector(s), $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } };
+  const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+  const rm = v => 'RM' + Math.round(v).toLocaleString('en-MY');
+  const pct = v => (Math.round(v * 10000) / 100).toFixed(v * 100 % 1 ? 2 : 0).replace(/\.?0+$/, '') + '%';
+  const pct1 = v => (v * 100).toFixed(1) + '%';
+  let toastT;
+  function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => (t.hidden = true), 3200); }
+  function sheet(html, onMount) {
+    const s = $('#sheet'); s.innerHTML = `<div class="sheet-in" role="dialog" aria-modal="true">${html}</div>`; s.hidden = false;
+    s.onclick = e => { if (e.target === s && !s.dataset.lock) closeSheet(); };
+    onMount && onMount(s); return s;
+  }
+  function closeSheet() { const s = $('#sheet'); s.hidden = true; s.innerHTML = ''; delete s.dataset.lock; }
+  const confirmBox = (title, body, ok) => new Promise(done => sheet(`<h3>${esc(title)}</h3><p>${esc(body)}</p><div class="row"><button class="btn" data-x>Cancel</button><button class="btn primary" data-ok>${esc(ok)}</button></div>`,
+    s => { $('[data-x]', s).onclick = () => { closeSheet(); done(false); }; $('[data-ok]', s).onclick = () => { closeSheet(); done(true); }; }));
+
+  /* ---------- saved quotations (figures only, on this phone) ---------- */
+  let quotes = load('wif.quotes', []);
+  const saveQuotes = () => save('wif.quotes', quotes);
+  const all = () => quotes.concat([window.WIF_SAMPLE]);
+  const byId = id => all().find(q => q.id === id);
+  let rate = load('wif.rate', 0.08);
+
+  const app = $('#app');
+  const bar = (title, sub, back) => `<header class="bar">${back ? '<button class="ib" id="back" aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button>' : ''}
+    <div class="brand"><b>${esc(title)}</b><span>${esc(sub)}</span></div></header>`;
+  const ICON = {
+    cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+    up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 15v5h16v-5"/></svg>',
+    del: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/></svg>'
+  };
+
+  /* ---------- home ---------- */
+  function home() {
+    location.hash = ''; app.oninput = null;
+    app.innerHTML = bar('What-If Fund Projector', 'REDEFINE · INVESTMENT-LINKED') + `<main class="wrap">
+      <section class="card hero"><h2>Beyond 2% and 5%</h2>
+        <div class="big">What if the fund earns 8%?</div>
+        <p>Snap the quotation's yearly table, or upload the MPOS PDF. See the fund value and how long the policy lasts at any return.</p>
+        <div class="big2"><button class="btn primary" id="cam">${ICON.cam}Take photo</button><button class="btn" id="up">${ICON.up}Upload PDF or photos</button></div>
+      </section>
+      <section><h2 class="muted" style="margin:6px 4px 8px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;font-size:12px">Quotations on this phone</h2>
+        ${all().map(q => `<div class="item"><button class="t" data-open="${esc(q.id)}" style="text-align:left"><b>${esc(q.label)}</b>
+          <span>${esc(q.data.product)} · ${q.data.premium ? rm(q.data.premium) + ' a year · ' : ''}${esc(q.saved)}</span></button>
+          ${q.sample ? '<span class="pill ok">Sample</span>' : `<button class="del" data-del="${esc(q.id)}" aria-label="Delete">${ICON.del}</button>`}</div>`).join('')}
+      </section>
+      <p class="disc">The PDF is read on this phone. Photos are read by AI through the REDEFINE team server (sign in with the team code). Client names and IC numbers are not needed or kept.</p>
+    </main>`;
+    $('#cam').onclick = () => $('#fCam').click();
+    $('#up').onclick = () => $('#fUp').click();
+    $$('[data-open]').forEach(b => b.onclick = () => openQuote(b.dataset.open));
+    $$('[data-del]').forEach(b => b.onclick = async () => {
+      const q = byId(b.dataset.del);
+      if (!(await confirmBox('Delete this quotation?', q.label + ' will be removed from this phone. This cannot be undone.', 'Delete'))) return;
+      quotes = quotes.filter(x => x.id !== q.id); saveQuotes(); home(); toast('Deleted');
+    });
+  }
+  ['#fCam', '#fUp'].forEach(id => $(id).addEventListener('change', e => { const f = Array.from(e.target.files || []); e.target.value = ''; if (f.length) intake(f); }));
+
+  /* ---------- reading ---------- */
+  const loadScript = src => new Promise((ok, bad) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => bad(new Error(src)); document.head.appendChild(s); });
+  const isPdf = f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
+  async function pdfLib() { if (!window.pdfjsLib) { await loadScript('vendor/pdf.min.js'); window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js'; } return window.pdfjsLib; }
+  async function openPdf(file) {
+    const lib = await pdfLib();
+    const task = lib.getDocument({data: new Uint8Array(await file.arrayBuffer())});
+    task.onPassword = (update, reason) => {
+      sheet(`<h3>${reason === 2 ? 'Wrong password' : 'This PDF has a password'}</h3><p>The password is used once on this phone and not saved.</p>
+        <div class="f"><label for="pw">PDF password</label><input id="pw" type="password" autocomplete="off"></div>
+        <div class="row"><button class="btn" data-x>Cancel</button><button class="btn primary" data-ok>Open</button></div>`, s => {
+        $('[data-x]', s).onclick = () => { closeSheet(); task.destroy(); };
+        $('[data-ok]', s).onclick = () => { const v = $('#pw', s).value; sheet('<h3>Opening PDF…</h3><div class="spin"></div>'); update(v); };
+      });
+    };
+    return task.promise;
+  }
+
+  async function intake(files) {
+    const pdf = files.find(isPdf);
+    if (pdf) {
+      sheet('<h3>Reading the PDF…</h3><div class="spin"></div><p style="text-align:center">On this phone. Nothing is sent.</p>'); $('#sheet').dataset.lock = '1';
+      let doc;
+      try { doc = await openPdf(pdf); } catch (e) { closeSheet(); return fail('That PDF could not be opened. Try a photo of the table page instead.'); }
+      try {
+        const pages = [];
+        for (let i = 1; i <= Math.min(doc.numPages, 14); i++) {
+          const c = await (await doc.getPage(i)).getTextContent();
+          pages.push(c.items.map(it => ({x: it.transform[4], y: it.transform[5], str: it.str})));
+        }
+        const r = WIFParse.fromPdfText(pages);
+        if (r.ok) { closeSheet(); doc.destroy(); return review(r.data, r.notes, true); }
+      } catch (e) { /* fall through to AI */ }
+      closeSheet();
+      const go = await confirmBox('Read this PDF with AI?', 'The table could not be read directly from this PDF (it may be a scan). Pick the pages with the yearly table and the "policy may sustain" lines, and the AI will read them.', 'Choose pages');
+      if (!go) { doc.destroy(); return; }
+      const imgs = [];
+      sheet('<h3>Preparing pages…</h3><div class="spin"></div>');
+      for (let i = 1; i <= Math.min(doc.numPages, 12); i++) {
+        const page = await doc.getPage(i), v1 = page.getViewport({scale: 1}), v = page.getViewport({scale: Math.min(3, 2000 / Math.max(v1.width, v1.height))});
+        const cv = document.createElement('canvas'); cv.width = Math.round(v.width); cv.height = Math.round(v.height);
+        const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+        await page.render({canvasContext: g, viewport: v}).promise;
+        imgs.push({blob: await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.9)), label: 'p' + i});
+      }
+      doc.destroy(); closeSheet();
+      return pickAndRead(imgs);
+    }
+    pickAndRead(files.map((f, i) => ({blob: f, label: 'Photo ' + (i + 1), on: true})));
+  }
+  function fail(msg) { sheet(`<h3>Could not read it</h3><p>${esc(msg)}</p><button class="btn block" data-x>OK</button>`, s => { $('[data-x]', s).onclick = closeSheet; }); }
+
+  /* AI through the team server (same sign-in as Form Filler) */
+  function session() { const own = localStorage.getItem('wif.session'); return own !== null ? load('wif.session', null) : load('rff.session', null); }
+  async function post(body, who) {
+    const s = who || session(); let r;
+    try { r = await fetch(CFG.api, {method: 'POST', headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({code: s.code, name: s.name}, body))}); }
+    catch (e) { throw {code: 'offline'}; }
+    let j; try { j = await r.json(); } catch (e) { throw {code: 'upstream_error'}; }
+    if (j.error) throw {code: j.error};
+    return j;
+  }
+  function signIn() {
+    return new Promise(done => {
+      const el = sheet(`<h3>Sign in to read photos</h3><p>Photos are read by AI on the REDEFINE team server. Enter your name and the team code (the same one as Form Filler).</p>
+        <div class="f"><label for="gName">Your name</label><input id="gName" autocomplete="name"></div>
+        <div class="f"><label for="gCode">Team code</label><input id="gCode" type="password" autocomplete="current-password"></div>
+        <p class="muted" id="gMsg" role="alert" style="color:var(--err);min-height:18px"></p>
+        <div class="row"><button class="btn" data-x>Cancel</button><button class="btn primary" data-ok>Sign in</button></div>`);
+      $('[data-x]', el).onclick = () => { closeSheet(); done(false); };
+      $('[data-ok]', el).onclick = async () => {
+        const who = {name: $('#gName', el).value.trim(), code: $('#gCode', el).value.trim()};
+        if (!who.name || !who.code) { $('#gMsg', el).textContent = 'Enter both.'; return; }
+        $('[data-ok]', el).disabled = true; $('[data-ok]', el).textContent = 'Checking…';
+        try { await post({op: 'login'}, who); save('wif.session', who); closeSheet(); done(true); }
+        catch (e) {
+          $('#gMsg', el).textContent = e.code === 'unauthorized' ? 'That team code is not right.' : e.code === 'locked' ? 'Too many wrong tries. Wait 15 minutes.' : 'Could not reach the team server. Check your connection.';
+          $('[data-ok]', el).disabled = false; $('[data-ok]', el).textContent = 'Sign in';
+        }
+      };
+    });
+  }
+  async function toJpegB64(blob) {
+    const bmp = await createImageBitmap(blob), k = Math.min(1, 2200 / Math.max(bmp.width, bmp.height));
+    const cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+    const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(bmp, 0, 0, cv.width, cv.height);
+    return cv.toDataURL('image/jpeg', 0.88).split(',')[1];
+  }
+  function parseJSON(text) {
+    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/), a = text.indexOf('{'), b = text.lastIndexOf('}');
+    for (const t of [text, fence && fence[1], a >= 0 && b > a && text.slice(a, b + 1)]) { if (!t) continue; try { return JSON.parse(t); } catch (e) {} }
+    throw {code: 'invalid_json'};
+  }
+  const AI_ERR = {
+    offline: 'No internet connection. Try again, or upload the MPOS PDF (read on the phone, no internet needed).',
+    daily_limit: 'The team has used today\'s AI limit. Upload the MPOS PDF instead, or try tomorrow.',
+    no_credit: 'The OpenAI account is out of credit. Tell Kah Jian.', bad_api_key: 'The team server key is not working. Tell Kah Jian.',
+    refused: 'The AI would not read this image. Try a clearer photo.', invalid_json: 'The AI answer was unreadable. Try again with fewer photos.',
+    rate_limited: 'The AI is busy. Wait a minute and try again.', image_rejected: 'One photo could not be opened. Try a screenshot or a different photo.'
+  };
+  async function pickAndRead(items) {
+    const max = CFG.maxPhotosPerRead || 4;
+    const urls = items.map(it => (it.url = URL.createObjectURL(it.blob)));
+    const el = sheet(`<h3 id="pickH"></h3><p>Pick the page with the yearly table (Table 1). Add the page with "the policy may sustain for…" if you have it: it makes the later years more accurate.</p>
+      <div class="thumbs pick">${items.map((it, i) => `<button type="button" class="th" data-i="${i}" aria-pressed="${!!it.on}"><img src="${it.url}" alt=""><span>${esc(it.label)}</span></button>`).join('')}</div>
+      <p id="pickP" class="muted"></p>
+      <div class="row"><button class="btn" data-x>Cancel</button><button class="btn primary" data-ok>Read with AI</button></div>`);
+    const refresh = () => {
+      const n = items.filter(it => it.on).length;
+      $('#pickH', el).textContent = `Send ${n} image${n === 1 ? '' : 's'} to the AI?`;
+      $('#pickP', el).textContent = (n > max ? `Choose up to ${max}. ` : '') + 'Images go to the REDEFINE team server and OpenAI only to be read; nothing is stored. Cover the client\'s name and IC if you can.';
+      $('[data-ok]', el).disabled = !n || n > max;
+    };
+    $$('.th', el).forEach(b => b.onclick = () => { const it = items[+b.dataset.i]; it.on = !it.on; b.setAttribute('aria-pressed', it.on); refresh(); });
+    refresh();
+    const go = await new Promise(done => { $('[data-x]', el).onclick = () => done(false); $('[data-ok]', el).onclick = () => done(true); });
+    const chosen = items.filter(it => it.on).map(it => it.blob);
+    closeSheet();
+    if (!go) { urls.forEach(URL.revokeObjectURL); return; }
+    if (!session() && !(await signIn())) { urls.forEach(URL.revokeObjectURL); return; }
+    sheet('<h3>Reading the quotation…</h3><div class="spin"></div><p style="text-align:center">Usually 20–60 seconds. Keep this screen open.</p>'); $('#sheet').dataset.lock = '1';
+    try {
+      const images = [];
+      for (const b of chosen) { try { images.push(await toJpegB64(b)); } catch (e) { throw {code: 'image_rejected'}; } }
+      const r = await post({op: 'ai', prompt: WIFParse.aiPrompt(), images});
+      if (r.truncated) throw {code: 'invalid_json'};
+      const data = WIFParse.fromAI(parseJSON(r.text));
+      closeSheet(); urls.forEach(URL.revokeObjectURL);
+      if (!data.rows.length) return fail('No yearly table was found in those images. Take a photo of the page titled "Table 1" with Scenario X and Scenario Y columns.');
+      review(data, data.unclear.map(u => 'AI not sure: ' + u), false);
+    } catch (e) {
+      closeSheet(); urls.forEach(URL.revokeObjectURL);
+      if (e.code === 'unauthorized') { save('wif.session', null); toast('Please sign in again.'); return; }
+      fail(AI_ERR[e.code] || 'Something went wrong (' + (e.code || 'error') + '). Try again.');
+    }
+  }
+
+  /* ---------- review: the agent confirms the figures before anything is calculated ---------- */
+  function review(data, notes, fromPdf, existingId) {
+    const d = JSON.parse(JSON.stringify(data));
+    d.rows = d.rows || []; d.sustain = d.sustain || {}; d.rates = d.rates || {};
+    const COLS = [['year', 'Yr'], ['age', 'Age'], ['alloc', 'Allocated'], ['charges', 'Charges'], ['tivX', 'Value X'], ['tivY', 'Value Y']];
+    const pv = v => v === null || v === undefined || isNaN(v) ? '' : v;
+    app.innerHTML = bar('Check the figures', fromPdf ? 'READ FROM PDF ON THIS PHONE' : 'READ BY AI · PLEASE CHECK', true) + `<main class="wrap">
+      <div id="msgs"></div>
+      <section class="card"><h2>Quotation</h2>
+        <div class="f"><label for="pName">Plan</label><input id="pName" value="${esc(d.product || '')}"></div>
+        <div class="grid2">
+          <div class="f"><label for="pAge">Entry age (next birthday)</label><input id="pAge" inputmode="numeric" value="${pv(d.entryAge)}"></div>
+          <div class="f"><label for="pPrem">Premium a year (RM)</label><input id="pPrem" inputmode="decimal" value="${pv(d.premium)}"></div>
+          <div class="f"><label for="pX">Scenario X return (%)</label><input id="pX" inputmode="decimal" value="${d.rates.x == null ? '' : +(d.rates.x * 100).toFixed(2)}"></div>
+          <div class="f"><label for="pY">Scenario Y return (%)</label><input id="pY" inputmode="decimal" value="${d.rates.y == null ? '' : +(d.rates.y * 100).toFixed(2)}"></div>
+          <div class="f"><label for="sX">Lasts to age at X%</label><input id="sX" inputmode="numeric" value="${pv(d.sustain.x)}" placeholder="from quotation"></div>
+          <div class="f"><label for="sY">Lasts to age at Y%</label><input id="sY" inputmode="numeric" value="${pv(d.sustain.y)}" placeholder="from quotation"></div>
+        </div>
+        <p class="muted">"Lasts to age" comes from the quotation's line "the policy may sustain for N years up to your age …". Leave blank if not shown.</p>
+      </section>
+      <section class="card"><h2>Yearly table (Table 1)</h2>
+        <p class="muted" style="margin-bottom:8px">Charges = insurance charges (basic + riders) + other charges, not the fund management charge. Value X / Y = total investment value.</p>
+        <div class="scroll"><table class="t edit"><thead><tr>${COLS.map(c => `<th>${c[1]}</th>`).join('')}<th></th></tr></thead>
+        <tbody id="rows">${d.rows.map((r, i) => `<tr data-i="${i}">${COLS.map(c => `<td><input data-k="${c[0]}" inputmode="decimal" value="${pv(r[c[0]])}" aria-label="${c[1]} row ${i + 1}"></td>`).join('')}<td><button data-rm="${i}" aria-label="Remove row">✕</button></td></tr>`).join('')}</tbody></table></div>
+        <button class="btn sm ghost" id="addRow">+ Add a row</button>
+      </section>
+      <div class="dock"><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="go">Calculate</button></div>
+    </main>`;
+    const collect = () => {
+      const n = v => { const t = String(v).replace(/[,\sRM%]/gi, ''); return t === '' || isNaN(+t) ? null : +t; };
+      d.product = $('#pName').value.trim() || 'Investment-linked plan';
+      d.entryAge = n($('#pAge').value); d.premium = n($('#pPrem').value);
+      d.rates = {x: n($('#pX').value) === null ? null : n($('#pX').value) / 100, y: n($('#pY').value) === null ? null : n($('#pY').value) / 100};
+      d.sustain = Object.assign({}, d.sustain, {x: n($('#sX').value), y: n($('#sY').value)});
+      d.rows = $$('#rows tr').map(tr => { const o = Object.assign({}, d.rows[+tr.dataset.i] || {}); $$('input', tr).forEach(inp => o[inp.dataset.k] = n(inp.value)); return o; });
+      return d;
+    };
+    const show = () => {
+      const c = WIF.check(collect());
+      $$('#rows input').forEach(inp => inp.classList.toggle('bad', inp.value.trim() === '' && inp.dataset.k !== 'age'));
+      $('#msgs').innerHTML = (c.problems.length ? `<div class="checks err"><b>Fix before calculating</b><ul>${c.problems.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>` : '')
+        + ((c.warnings.length || notes.length) ? `<div class="checks"><b>Please check</b><ul>${c.warnings.concat(notes).map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>` : '')
+        + (!c.problems.length && !c.warnings.length && !notes.length ? `<div class="checks" style="background:var(--okbg);border-color:#BFE3D7"><b style="color:var(--ok)">${d.rows.length} rows read.</b> Compare a few numbers with the quotation, then confirm.</div>` : '');
+      $('#go').disabled = !!c.problems.length;
+      return c;
+    };
+    app.oninput = () => show();
+    $$('[data-rm]').forEach(b => b.onclick = () => { collect(); d.rows.splice(+b.dataset.rm, 1); review(d, notes, fromPdf, existingId); });
+    $('#addRow').onclick = () => { collect(); const last = d.rows[d.rows.length - 1] || {}; d.rows.push({year: last.year ? last.year + 1 : 1, age: last.age ? last.age + 1 : null}); review(d, notes, fromPdf, existingId); };
+    $('#back').onclick = $('#cancel').onclick = home;
+    $('#go').onclick = () => {
+      const c = show(); if (c.problems.length) return;
+      const m = WIF.calibrate(d);
+      if (!m.ok) return toast(m.problems[0]);
+      const id = existingId && !byId(existingId).sample ? existingId : 'q' + Date.now();
+      const label = `${d.product.replace(/\s*\(.*\)$/, '')}, age ${d.entryAge}`;
+      const rec = {id, label, saved: new Date().toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'}), data: d};
+      quotes = quotes.filter(q => q.id !== id); quotes.unshift(rec); quotes = quotes.slice(0, 30); saveQuotes();
+      openQuote(id);
+    };
+    show();
+    window.scrollTo(0, 0);
+  }
+
+  /* ---------- result ---------- */
+  function openQuote(id) {
+    const rec = byId(id); if (!rec) return home();
+    const model = WIF.calibrate(rec.data);
+    if (!model.ok) return review(rec.data, [], rec.data.source === 'pdf', id);
+    app.oninput = null;
+    const d = rec.data, endAge = model.entryAge + model.termYears;
+    const px = WIF.project(model, model.rates.x), py = WIF.project(model, model.rates.y);
+    const need = WIF.minReturn(model);
+    const acc = model.accuracy;
+    const ages = [];
+    for (let a = Math.ceil((model.entryAge + 1) / 5) * 5; a <= endAge; a += 5) if (a >= model.entryAge + 4) ages.push(a);
+    if (ages[ages.length - 1] !== endAge) ages.push(endAge);
+    app.innerHTML = bar(d.product, `AGE ${model.entryAge} · ${d.premium ? rm(d.premium) + ' A YEAR · ' : ''}COVER TO AGE ${endAge}`, true) + `<main class="wrap">
+      <section class="card"><h2>Your assumed fund return</h2>
+        <div class="rate"><button class="step" id="minus" aria-label="Lower">−</button>
+          <div class="val"><input id="rate" inputmode="decimal" aria-label="Return per year in percent"><small>a year, same basis as GE's ${pct(model.rates.x)} / ${pct(model.rates.y)}</small></div>
+          <button class="step" id="plus" aria-label="Higher">+</button></div>
+        <input type="range" id="slide" min="0" max="15" step="0.25" aria-label="Return slider">
+        <div class="chips">${[2, 4, 5, 6, 8, 10].map(v => `<button data-r="${v}">${v}%</button>`).join('')}</div>
+      </section>
+      <div id="out"></div>
+      <section class="card"><h2>Fund value (cash value) by age</h2>
+        <div class="scroll"><table class="t"><thead><tr><th>Age</th><th>${pct(model.rates.x)} (GE X)</th><th>${pct(model.rates.y)} (GE Y)</th><th class="u" id="thU"></th></tr></thead><tbody id="tbl"></tbody></table></div>
+        <p class="note" style="margin-top:8px"><span class="est">≈</span> = after the last age printed in the quotation (age ${model.entryAge + model.lastDataYear}); charges there are estimated.</p>
+      </section>
+      <section class="card"><h2>Fund value over time</h2><div id="chart"></div>
+        <div class="legend"><span><i style="background:var(--cx)"></i>${pct(model.rates.x)}</span><span><i style="background:var(--cy)"></i>${pct(model.rates.y)}</span><span><i style="background:var(--cu)"></i><b id="lgU"></b></span><span>● GE printed figures</span></div>
+      </section>
+      <section class="card"><h2>Can you trust it?</h2>
+        <div class="acc"><span class="dot" style="background:${acc.grade === 'good' ? 'var(--ok)' : acc.grade === 'fair' ? 'var(--gold)' : 'var(--err)'}"></span><div>
+          <b>${acc.grade === 'good' ? 'Matches GE\'s own figures' : acc.grade === 'fair' ? 'Close to GE\'s figures' : 'Does not match GE\'s figures well, so check the readings'}</b>
+          <p class="muted">Re-creating GE's ${pct(model.rates.x)} and ${pct(model.rates.y)} columns from the quotation's own charges, the app is within ${(acc.maxErr * 100).toFixed(acc.maxErr < 0.01 ? 2 : 1)}% at every printed year.
+          ${['x', 'y'].map(k => acc.lapse[k].ge ? `At ${pct(model.rates[k])} GE says the policy lasts to age ${acc.lapse[k].ge}; the app gets ${acc.lapse[k].app}.` : '').join(' ')}</p></div></div>
+        <details><summary>How it works</summary><ul class="note">
+          <li>The app uses the quotation's allocated premium and charges for each year, deducted monthly, and fits the fund's tax (${pct1(model.costs.tax)}) and fund management charge (${(model.costs.fmc * 100).toFixed(2)}% a year) to GE's figures.</li>
+          <li>For years the quotation skips (for example 11–14), charges are filled in between the printed years and fine-tuned so GE's ${pct(model.rates.x)} and ${pct(model.rates.y)} values come out the same.</li>
+          <li>After age ${model.entryAge + model.lastDataYear} the quotation prints no charges. The app keeps them rising ${pct1(model.growthAfter - 1)} a year${model.growthTuned ? ', tuned so its run-out ages match the quotation\'s "policy may sustain" lines' : ' (the last printed pace)'}.</li>
+          <li>Your return is the fund's return before tax and fund charge, the same basis as GE's ${pct(model.rates.x)} / ${pct(model.rates.y)}. It is steady every year; real returns go up and down, which usually makes things worse.</li>
+          <li>Premiums are assumed paid in full every year. Top-ups and withdrawals are not included.</li>
+        </ul></details>
+        <details><summary>Compare with every printed year</summary><div class="scroll"><table class="t"><thead><tr><th>Yr</th><th>Age</th><th>GE ${pct(model.rates.x)}</th><th>App</th><th>GE ${pct(model.rates.y)}</th><th>App</th></tr></thead><tbody>
+          ${acc.rows.map(r => `<tr><td>${r.year}</td><td>${r.age}</td><td>${rm(r.geX)}</td><td>${rm(r.appX)}</td><td>${rm(r.geY)}</td><td>${rm(r.appY)}</td></tr>`).join('')}</tbody></table></div></details>
+        <div class="row" style="margin-top:10px"><button class="btn sm" id="edit">Check the figures</button></div>
+      </section>
+      <p class="disc">Internal estimate by REDEFINE from the quotation's own figures. It is not a Great Eastern benefit illustration. Returns are not guaranteed, and insurance charges can be revised. Use the official quotation for any recommendation.</p>
+    </main>`;
+    $('#back').onclick = home;
+    $('#edit').onclick = () => review(d, [], d.source === 'pdf', id);
+
+    const setRate = v => {
+      v = Math.max(-0.05, Math.min(0.3, Math.round(v * 10000) / 10000)); rate = v; save('wif.rate', v);
+      if (document.activeElement !== $('#rate')) $('#rate').value = +(v * 100).toFixed(2) + '%';
+      $('#slide').value = v * 100;
+      $$('.chips button').forEach(b => b.setAttribute('aria-pressed', Math.abs(+b.dataset.r - v * 100) < 1e-6));
+      draw(v);
+    };
+    function draw(r) {
+      const pu = WIF.project(model, r);
+      const lapsedEarly = !pu.fullTerm;
+      const atAge = [65, 60, 70].find(a => a > model.entryAge && a <= endAge) || endAge;
+      const peak = pu.years.reduce((m, y) => y.fund > m.fund ? y : m, {fund: 0, age: model.entryAge});
+      $('#out').innerHTML = `<section class="verdict ${lapsedEarly ? 'bad' : 'ok'}">
+        <div class="k">At ${pct(r)} a year</div>
+        <div class="v">${lapsedEarly ? `Fund runs out after age ${pu.sustainsToAge}` : `Lasts to age ${endAge}, the full term`}</div>
+        <p>${lapsedEarly ? `That is ${endAge - pu.sustainsToAge} years before cover ends at ${endAge}. To keep it going, the client would need to top up, raise the premium or lower the cover.` : `The fund still has ${rm(pu.years[pu.years.length - 1].fund)} at age ${endAge}.`}
+          ${need !== null ? ` It needs about <b>${pct1(need)}</b> a year to last to age ${endAge}.` : ''}</p>
+        <div class="stats">
+          <div><span>Fund value at age ${atAge}</span><b>${pu.fundAt(atAge) ? rm(pu.fundAt(atAge)) : 'Ran out'}</b></div>
+          <div><span>Highest fund value</span><b>${rm(peak.fund)}</b><span>at age ${peak.age}</span></div>
+          <div><span>GE ${pct(model.rates.x)}: lasts to</span><b>age ${px.sustainsToAge}${px.fullTerm ? ' ✓' : ''}</b></div>
+          <div><span>GE ${pct(model.rates.y)}: lasts to</span><b>age ${py.sustainsToAge}${py.fullTerm ? ' ✓' : ''}</b></div>
+        </div></section>`;
+      $('#thU').textContent = pct(r) + ' (yours)'; $('#lgU').textContent = pct(r) + ' (yours)';
+      const cell = (p, a) => { const v = p.fundAt(a); return v === null ? '–' : v === 0 && (!p.fullTerm && a > p.sustainsToAge) ? '<span style="color:var(--err)">Ran out</span>' : rm(v); };
+      $('#tbl').innerHTML = ages.map(a => `<tr><td>${a}${a > model.entryAge + model.lastDataYear ? ' <span class="est">≈</span>' : ''}</td><td>${cell(px, a)}</td><td>${cell(py, a)}</td><td class="u">${cell(pu, a)}</td></tr>`).join('');
+      chart(pu);
+    }
+    function chart(pu) {
+      const W = 340, H = 200, L = 46, R = 8, T = 10, B = 24;
+      const series = [[px, 'var(--cx)'], [py, 'var(--cy)'], [pu, 'var(--cu)']];
+      const maxV = Math.max(1, ...series.flatMap(([p]) => p.years.map(y => y.fund)));
+      const nice = (() => { const e = Math.pow(10, Math.floor(Math.log10(maxV))); for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5, 8, 10]) if (m * e >= maxV) return m * e; return 10 * e; })();
+      const x = a => L + (a - model.entryAge) / (endAge - model.entryAge) * (W - L - R), y = v => T + (1 - v / nice) * (H - T - B);
+      const path = p => { const pts = [[model.entryAge, 0]].concat(p.years.map(v => [v.age, v.fund])); if (!p.fullTerm) pts.push([p.sustainsToAge + 1, 0]); return 'M' + pts.map(q => x(q[0]).toFixed(1) + ',' + y(q[1]).toFixed(1)).join('L'); };
+      const fmt = v => v >= 1e6 ? (v / 1e6).toFixed(v % 1e6 ? 1 : 0) + 'm' : v >= 1e3 ? Math.round(v / 1e3) + 'k' : v;
+      let g = '';
+      for (let i = 0; i <= 4; i++) { const v = nice * i / 4; g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#ECE9E1"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="#6B7180">${fmt(v)}</text>`; }
+      for (let a = Math.ceil(model.entryAge / 10) * 10; a <= endAge; a += 10) g += `<text x="${x(a)}" y="${H - 6}" text-anchor="middle" font-size="10" fill="#6B7180">${a}</text>`;
+      const lastAge = model.entryAge + model.lastDataYear;
+      g += `<rect x="${x(lastAge)}" y="${T}" width="${W - R - x(lastAge)}" height="${H - T - B}" fill="#F6F4EE" opacity=".7"/><text x="${x(lastAge) + 4}" y="${T + 11}" font-size="9.5" fill="#6B7180">estimated charges</text>`;
+      g += series.map(([p, c], i) => `<path d="${path(p)}" fill="none" stroke="${c}" stroke-width="${i === 2 ? 3 : 2}" stroke-linejoin="round"/>`).join('');
+      g += model.rows.map(r => ['tivX', 'tivY'].map((k, i) => r[k] > 0 && r[k] <= nice ? `<circle cx="${x(model.entryAge + r.year)}" cy="${y(r[k])}" r="2.6" fill="#fff" stroke="${i ? 'var(--cy)' : 'var(--cx)'}" stroke-width="1.5"/>` : '').join('')).join('');
+      $('#chart').innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Fund value by age at three returns">${g}</svg>`;
+    }
+    $('#minus').onclick = () => setRate(rate - 0.005);
+    $('#plus').onclick = () => setRate(rate + 0.005);
+    $('#slide').oninput = e => setRate(+e.target.value / 100);
+    $$('.chips button').forEach(b => b.onclick = () => setRate(+b.dataset.r / 100));
+    const typed = () => { const v = parseFloat($('#rate').value); if (!isNaN(v)) setRate(v / 100); };
+    $('#rate').addEventListener('input', typed);
+    $('#rate').addEventListener('focus', e => { e.target.value = +(rate * 100).toFixed(2); e.target.select(); });
+    $('#rate').addEventListener('blur', () => setRate(rate));
+    setRate(rate);
+    location.hash = 'q=' + id;
+    window.scrollTo(0, 0);
+  }
+
+  window.addEventListener('popstate', () => { if (!location.hash) home(); });
+  const h = location.hash.match(/q=([\w-]+)/);
+  if (h && byId(h[1])) openQuote(h[1]); else home();
+})();
