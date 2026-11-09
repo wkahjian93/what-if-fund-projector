@@ -22,24 +22,31 @@ Quotations are kept on this phone only (figures, no client name). Delete one wit
 ## How it calculates
 
 - It uses each year's allocated premium and charges from the quotation, deducted monthly.
-- The fund's tax and fund management charge are fitted to GE's own figures.
-- For years the quotation skips, charges are filled in between the printed years. They are fine-tuned so the app's 2% and 5% values land on GE's.
-- After the last printed age, charges keep rising. The rate is tuned so the app's run-out ages match the quotation's "policy may sustain" lines.
-- Your return uses the same basis as GE's 2% / 5% (before tax and fund charge). It is assumed to be the same every year; real returns swing, which usually shortens the policy.
-- Premiums are assumed paid in full every year. Top-ups and withdrawals are not modelled.
+- **Two kinds of plan.** For "sum assured + fund" plans (e.g. SmartProtect You), charges are the same at 2% and 5%. For "higher of sum assured or fund" plans (e.g. Smart Revive Max), charges are printed per scenario: the app works out the insurance rate per RM at risk, so a bigger fund means lower charges.
+- The fund's tax and fund management charge are fitted to GE's own figures. Both quotations gave the same fund charge as the fund fact sheet (0.75% and 1.5%).
+- For years the quotation skips, charges are filled in between the printed years and fine-tuned so the app's 2% and 5% values land on GE's.
+- **Boosters / loyalty bonuses** credited into the fund (e.g. RM25,000 at 65 and every 10 years) are read from the PDF and added while the policy is in force.
+- **After the last printed charges** (when both 2% and 5% have run out, GE prints zeros):
+  - The basic insurance rate keeps rising with age. Two GE quotations agree that it rises about 8–9% a year from age 50 to 76; the app uses the plan's own printed pace, or that reference.
+  - Riders and fees keep their own printed pace.
+  - If the quotation's "policy may sustain … up to age N" lines need faster charges, the app adds just enough to match them.
+  - GE's figures only pin charges down to the 5% run-out age. After that the app shows a **range**: the careful answer (the faster pace continues) and the printed-pace answer.
+- Your return uses the same basis as GE's 2% / 5% (before tax and fund charge), the same every year. Real returns swing, which usually shortens the policy.
+- Premiums are paid as in the quotation. Top-ups and withdrawals are not modelled.
 
-## Test run (real MPOS quotation, SmartProtect You, male 26, RM333.35 a month)
+## Test runs (two real MPOS quotations)
 
-| | GE quotation | This app |
+| | SmartProtect You, male 26 | Smart Revive Max, male 32 |
 |---|---|---|
-| Fund value at 2%, years 1–40 | printed | within 0.07% at every printed year |
-| Fund value at 5%, years 1–50 | printed | within 0.07% at every printed year |
-| Lasts to age at 2% | 72 | 72 |
-| Lasts to age at 5% | 80 | 80 |
-| **Lasts to age at 8%** | not shown | **91** (fund RM287,179 at age 65) |
-| **Return needed to last to 100** | not shown | **about 9.5%** |
+| Plan type | sum assured + fund, RM333.35 a month for life | higher of sum assured or fund, 5-year premium, RM25k booster |
+| App vs GE fund values at 2% and 5% | within 0.07% | within 0.04% |
+| Lasts to age at 2% / 5%: GE vs app | 72 / 80 vs **72 / 80** | 61 / 71 vs **61 / 71** |
+| Extra charge growth needed to match GE | +7.7% a year after 76 | **none**: the printed 8.9% pace already matches |
+| At 6% | lasts to 83–84 | lasts to 76 |
+| At 8% | lasts to **91–97** | lasts to 90 (full term) |
+| Return needed to last the full term | **8.2–9.5%** (to 100) | **7.7%** (to 90) |
 
-Run `node test/test.js` for the automated checks (16 checks). Run the preview `what-if-fund` on port 5195.
+Run `node test/test.js` for the automated checks (28 checks). Run the preview `what-if-fund` on port 5195.
 
 ## Files
 

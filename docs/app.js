@@ -23,7 +23,7 @@
   /* ---------- saved quotations (figures only, on this phone) ---------- */
   let quotes = load('wif.quotes', []);
   const saveQuotes = () => save('wif.quotes', quotes);
-  const all = () => quotes.concat([window.WIF_SAMPLE]);
+  const all = () => quotes.concat(window.WIF_SAMPLES || []);
   const byId = id => all().find(q => q.id === id);
   let rate = load('wif.rate', 0.08);
 
@@ -203,8 +203,9 @@
   /* ---------- review: the agent confirms the figures before anything is calculated ---------- */
   function review(data, notes, fromPdf, existingId) {
     const d = JSON.parse(JSON.stringify(data));
-    d.rows = d.rows || []; d.sustain = d.sustain || {}; d.rates = d.rates || {};
-    const COLS = [['year', 'Yr'], ['age', 'Age'], ['alloc', 'Allocated'], ['charges', 'Charges'], ['tivX', 'Value X'], ['tivY', 'Value Y']];
+    d.rows = (d.rows || []).map(r => { const o = Object.assign({}, r); if (o.chargesX === undefined && o.charges !== undefined) { o.chargesX = o.chargesY = o.charges; } delete o.charges; return o; });
+    d.sustain = d.sustain || {}; d.rates = d.rates || {}; const bn = d.bonus || {};
+    const COLS = [['year', 'Yr'], ['age', 'Age'], ['alloc', 'Allocated'], ['chargesX', 'Charges X'], ['chargesY', 'Charges Y'], ['sa', 'Sum assured'], ['tivX', 'Value X'], ['tivY', 'Value Y']];
     const pv = v => v === null || v === undefined || isNaN(v) ? '' : v;
     app.innerHTML = bar('Check the figures', fromPdf ? 'READ FROM PDF ON THIS PHONE' : 'READ BY AI · PLEASE CHECK', true) + `<main class="wrap">
       <div id="msgs"></div>
@@ -219,9 +220,16 @@
           <div class="f"><label for="sY">Lasts to age at Y%</label><input id="sY" inputmode="numeric" value="${pv(d.sustain.y)}" placeholder="from quotation"></div>
         </div>
         <p class="muted">"Lasts to age" comes from the quotation's line "the policy may sustain for N years up to your age …". Leave blank if not shown.</p>
+        <h2 style="margin-top:14px">Booster / bonus into the fund</h2>
+        <div class="grid2" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="f"><label for="bAmt">Amount (RM)</label><input id="bAmt" inputmode="decimal" value="${pv(bn.amount)}" placeholder="none"></div>
+          <div class="f"><label for="bAge">At age</label><input id="bAge" inputmode="numeric" value="${pv(bn.age)}"></div>
+          <div class="f"><label for="bEv">Every (yrs)</label><input id="bEv" inputmode="numeric" value="${pv(bn.every)}" placeholder="once"></div>
+        </div>
+        <p class="muted">Only if the quotation credits a booster or loyalty bonus into the investment value (age next birthday). Leave blank if none.</p>
       </section>
       <section class="card"><h2>Yearly table (Table 1)</h2>
-        <p class="muted" style="margin-bottom:8px">Charges = insurance charges (basic + riders) + other charges, not the fund management charge. Value X / Y = total investment value.</p>
+        <p class="muted" style="margin-bottom:8px">Charges X / Y = insurance charges (basic + riders) + other charges for each scenario, not the fund management charge. Most plans print one set, so X and Y are the same. Plans that pay the higher of sum assured or fund print them per scenario. Value X / Y = total investment value.</p>
         <div class="scroll"><table class="t edit"><thead><tr>${COLS.map(c => `<th>${c[1]}</th>`).join('')}<th></th></tr></thead>
         <tbody id="rows">${d.rows.map((r, i) => `<tr data-i="${i}">${COLS.map(c => `<td><input data-k="${c[0]}" inputmode="decimal" value="${pv(r[c[0]])}" aria-label="${c[1]} row ${i + 1}"></td>`).join('')}<td><button data-rm="${i}" aria-label="Remove row">✕</button></td></tr>`).join('')}</tbody></table></div>
         <button class="btn sm ghost" id="addRow">+ Add a row</button>
@@ -234,6 +242,8 @@
       d.entryAge = n($('#pAge').value); d.premium = n($('#pPrem').value);
       d.rates = {x: n($('#pX').value) === null ? null : n($('#pX').value) / 100, y: n($('#pY').value) === null ? null : n($('#pY').value) / 100};
       d.sustain = Object.assign({}, d.sustain, {x: n($('#sX').value), y: n($('#sY').value)});
+      const ba = n($('#bAmt').value), bg = n($('#bAge').value);
+      d.bonus = ba && bg ? {name: (d.bonus && d.bonus.name) || 'Booster', amount: ba, age: bg, every: n($('#bEv').value)} : null;
       d.rows = $$('#rows tr').map(tr => { const o = Object.assign({}, d.rows[+tr.dataset.i] || {}); $$('input', tr).forEach(inp => o[inp.dataset.k] = n(inp.value)); return o; });
       return d;
     };
@@ -272,7 +282,7 @@
     app.oninput = null;
     const d = rec.data, endAge = model.entryAge + model.termYears;
     const px = WIF.project(model, model.rates.x), py = WIF.project(model, model.rates.y);
-    const need = WIF.minReturn(model);
+    const need = WIF.minReturn(model), needT = WIF.minReturn(model, null, true);
     const acc = model.accuracy;
     const ages = [];
     for (let a = Math.ceil((model.entryAge + 1) / 5) * 5; a <= endAge; a += 5) if (a >= model.entryAge + 4) ages.push(a);
@@ -301,9 +311,11 @@
         <details><summary>How it works</summary><ul class="note">
           <li>The app uses the quotation's allocated premium and charges for each year, deducted monthly, and fits the fund's tax (${pct1(model.costs.tax)}) and fund management charge (${(model.costs.fmc * 100).toFixed(2)}% a year) to GE's figures.</li>
           <li>For years the quotation skips (for example 11–14), charges are filled in between the printed years and fine-tuned so GE's ${pct(model.rates.x)} and ${pct(model.rates.y)} values come out the same.</li>
-          <li>After age ${model.entryAge + model.lastDataYear} the quotation prints no charges. The app keeps them rising ${pct1(model.growthAfter - 1)} a year${model.growthTuned ? ', tuned so its run-out ages match the quotation\'s "policy may sustain" lines' : ' (the last printed pace)'}.</li>
+          <li>After age ${model.entryAge + model.lastDataYear} the quotation prints no charges. ${model.level ? `The insurance rate per RM at risk keeps rising ${pct1(model.growth.q - 1)} a year by age (${model.growth.qFromRef ? 'GE reference from two quotations' : 'this plan\'s printed pace, in line with the GE reference of about 8–9%'})${model.growth.fixed > 1.001 ? `; riders and fees rise ${pct1(model.growth.fixed - 1)} a year` : ''}.` : `Charges keep rising at their printed pace (${pct1(model.growth.fixed - 1)} a year).`}${model.growthTuned ? (Math.abs(model.growth.extra - 1) < 0.01 ? ' That pace alone gives the same run-out ages as the quotation\'s "policy may sustain" lines, so no adjustment is needed.' : ` To match the quotation's "policy may sustain" ages they need an extra ${pct1(model.growth.extra - 1)} a year.`) : ''}</li>
+          ${model.growthTuned && model.growth.extra > 1.01 ? `<li>GE's figures pin charges down only to age ${model.anchorAge - 1}. After that the app keeps the faster pace (the careful answer). If charges go back to the printed pace, results are better; the range shows both.</li>` : ''}
+          ${model.bonus ? `<li>${esc(model.bonus.name)} of ${rm(model.bonus.amount)} is added to the fund at age ${model.bonus.age}${model.bonus.every ? ` and every ${model.bonus.every} years after` : ''}, while the policy is in force.</li>` : ''}
           <li>Your return is the fund's return before tax and fund charge, the same basis as GE's ${pct(model.rates.x)} / ${pct(model.rates.y)}. It is steady every year; real returns go up and down, which usually makes things worse.</li>
-          <li>Premiums are assumed paid in full every year. Top-ups and withdrawals are not included.</li>
+          <li>${model.premiumEnds ? `Premiums are paid as in the quotation (they stop after year ${model.rows.filter(r => r.premium > 0).slice(-1)[0].year}).` : 'Premiums are assumed paid in full every year.'} Top-ups and withdrawals are not included.</li>
         </ul></details>
         <details><summary>Compare with every printed year</summary><div class="scroll"><table class="t"><thead><tr><th>Yr</th><th>Age</th><th>GE ${pct(model.rates.x)}</th><th>App</th><th>GE ${pct(model.rates.y)}</th><th>App</th></tr></thead><tbody>
           ${acc.rows.map(r => `<tr><td>${r.year}</td><td>${r.age}</td><td>${rm(r.geX)}</td><td>${rm(r.appX)}</td><td>${rm(r.geY)}</td><td>${rm(r.appY)}</td></tr>`).join('')}</tbody></table></div></details>
@@ -322,15 +334,17 @@
       draw(v);
     };
     function draw(r) {
-      const pu = WIF.project(model, r);
+      const pu = WIF.project(model, r), pt = WIF.project(model, r, true);
+      const range = pt.sustainsToAge !== pu.sustainsToAge;
       const lapsedEarly = !pu.fullTerm;
       const atAge = [65, 60, 70].find(a => a > model.entryAge && a <= endAge) || endAge;
       const peak = pu.years.reduce((m, y) => y.fund > m.fund ? y : m, {fund: 0, age: model.entryAge});
       $('#out').innerHTML = `<section class="verdict ${lapsedEarly ? 'bad' : 'ok'}">
         <div class="k">At ${pct(r)} a year</div>
         <div class="v">${lapsedEarly ? `Fund runs out after age ${pu.sustainsToAge}` : `Lasts to age ${endAge}, the full term`}</div>
+        ${range ? `<p style="font-weight:600;margin-bottom:6px">Range: age ${pu.sustainsToAge} to ${pt.fullTerm ? endAge + ' (full term)' : pt.sustainsToAge}. The later age applies if charges after age ${model.anchorAge - 1} rise at the printed pace, not the faster pace GE's figures need up to then.</p>` : ''}
         <p>${lapsedEarly ? `That is ${endAge - pu.sustainsToAge} years before cover ends at ${endAge}. To keep it going, the client would need to top up, raise the premium or lower the cover.` : `The fund still has ${rm(pu.years[pu.years.length - 1].fund)} at age ${endAge}.`}
-          ${need !== null ? ` It needs about <b>${pct1(need)}</b> a year to last to age ${endAge}.` : ''}</p>
+          ${need !== null ? ` It needs about <b>${pct1(need)}</b> a year to last to age ${endAge}${needT !== null && Math.abs(needT - need) > 0.001 ? ` (${pct1(needT)} at the printed pace)` : ''}.` : ''}</p>
         <div class="stats">
           <div><span>Fund value at age ${atAge}</span><b>${pu.fundAt(atAge) ? rm(pu.fundAt(atAge)) : 'Ran out'}</b></div>
           <div><span>Highest fund value</span><b>${rm(peak.fund)}</b><span>at age ${peak.age}</span></div>

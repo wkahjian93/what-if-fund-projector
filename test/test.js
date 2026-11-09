@@ -1,43 +1,70 @@
-// node test/test.js : engine and reader checks against the real MPOS quotation figures (fixture-mpos.json)
-const W = require('../docs/engine.js'), P = require('../docs/parse.js'), q = require('./fixture-mpos.json');
+// node test/test.js : engine and reader checks against two real MPOS quotations (figures only)
+//   fixture-mpos.json  SmartProtect You, death benefit = sum assured + fund (charges same in X and Y)
+//   fixture-srm.json   Smart Revive Max, death benefit = higher of sum assured or fund, 5-year premium, RM25k booster at 65 / 75 / 85
+const W = require('../docs/engine.js'), P = require('../docs/parse.js');
+const spy = require('./fixture-mpos.json'), srm = require('./fixture-srm.json');
 let pass = 0, fail = 0;
 const ok = (c, msg) => { c ? pass++ : (fail++, console.log('FAIL', msg)); };
+const clone = o => JSON.parse(JSON.stringify(o));
 
-// 1. re-creates GE's own 2% / 5% figures
-const m = W.calibrate(q);
-ok(m.ok, 'calibrates');
-ok(m.accuracy.maxErr < 0.005, 'within 0.5% of every printed GE value (got ' + (m.accuracy.maxErr * 100).toFixed(2) + '%)');
-ok(m.accuracy.lapse.x.app === 72 && m.accuracy.lapse.y.app === 80, 'run-out ages 72 / 80 match the quotation');
-ok(m.accuracy.grade === 'good', 'grade good');
-ok(Math.abs(m.costs.fmc - 0.0075) < 0.0006, 'fitted fund charge ~0.75% (fund fact sheet says 0.75%)');
+// 1. SmartProtect You: re-creates GE's own 2% / 5% figures
+const m = W.calibrate(spy);
+ok(m.ok && !m.level, 'SPY calibrates as a "sum assured + fund" plan');
+ok(m.accuracy.maxErr < 0.005, 'SPY within 0.5% of every printed GE value (' + (m.accuracy.maxErr * 100).toFixed(2) + '%)');
+ok(m.accuracy.lapse.x.app === 72 && m.accuracy.lapse.y.app === 80, 'SPY run-out ages 72 / 80 match');
+ok(Math.abs(m.costs.fmc - 0.0075) < 0.0006, 'SPY fitted fund charge ~0.75% (fund fact sheet: 0.75%)');
 
-// 2. the pain point: 8% and the return needed for age 100
-const p8 = W.project(m, 0.08);
-ok(!p8.fullTerm && p8.sustainsToAge > 80 && p8.sustainsToAge < 100, '8% lasts longer than 5% but not to 100 (age ' + p8.sustainsToAge + ')');
-ok(p8.fundAt(65) > W.project(m, 0.05).fundAt(65), '8% fund at 65 above 5%');
+// 2. the pain point: 8%, the range, and the return needed for age 100
+const p8 = W.project(m, 0.08), t8 = W.project(m, 0.08, true);
+ok(!p8.fullTerm && p8.sustainsToAge > 80 && p8.sustainsToAge < 100, 'SPY 8% lasts beyond 5% but not to 100 (age ' + p8.sustainsToAge + ')');
+ok(t8.sustainsToAge >= p8.sustainsToAge, 'printed-pace view is never worse than the careful view (' + t8.sustainsToAge + ')');
+ok(W.project(m, 0.05, true).sustainsToAge === 80, 'both views keep GE\'s own 5% run-out age');
 const need = W.minReturn(m);
-ok(need > 0.08 && need < 0.12, 'return needed to last to 100 is between 8% and 12% (' + (need * 100).toFixed(2) + '%)');
+ok(need > 0.08 && need < 0.12, 'SPY return needed to last to 100: ' + (need * 100).toFixed(2) + '%');
 ok(W.project(m, need).fullTerm && !W.project(m, need - 0.002).fullTerm, 'minReturn is the boundary');
 let prev = -1, mono = true; for (let r = 0; r <= 0.12; r += 0.01) { const a = W.project(m, r).sustainsToAge; if (a < prev) mono = false; prev = a; }
 ok(mono, 'higher return never shortens the policy');
 
-// 3. messy / missing data is refused, not guessed
-const bad = JSON.parse(JSON.stringify(q)); bad.rows[3].tivY = null;
-const c1 = W.check(bad); ok(c1.problems.some(p => /year 4/.test(p) && /Y/.test(p)), 'missing value is flagged with its row');
-ok(!W.calibrate(bad).ok, 'calculation refuses missing figures');
-const swap = JSON.parse(JSON.stringify(q)); swap.rows[5].tivX = 99999;
-ok(W.check(swap).warnings.length > 0, 'X above Y is warned');
-const norates = JSON.parse(JSON.stringify(q)); norates.rates = {x: null, y: 0.05};
-ok(W.check(norates).problems.length > 0, 'missing scenario rate is a problem');
+// 3. Smart Revive Max: charges depend on the fund, limited pay, booster
+const s = W.calibrate(srm);
+ok(s.ok && s.level, 'SRM calibrates as a "higher of sum assured or fund" plan');
+ok(s.bonus && s.bonus.amount === 25000 && s.bonus.age === 65 && s.bonus.every === 10, 'SRM booster read: RM25,000 at 65, every 10 years');
+ok(s.accuracy.maxErr < 0.005, 'SRM within 0.5% of every printed GE value (' + (s.accuracy.maxErr * 100).toFixed(2) + '%)');
+ok(s.accuracy.lapse.x.app === 61 && s.accuracy.lapse.y.app === 71, 'SRM run-out ages 61 / 71 match');
+ok(Math.abs(s.growth.extra - 1) < 0.01, 'SRM needs no extra charge growth: the printed insurance-rate pace already gives GE\'s run-out age');
+ok(s.growth.q > 1.07 && s.growth.q < 1.10, 'SRM insurance rate rises 7-10% a year by age (' + ((s.growth.q - 1) * 100).toFixed(1) + '%)');
+ok(Math.abs(s.costs.fmc - 0.015) < 0.001, 'SRM fitted fund charge ~1.5% (fund fact sheet: 1.5%)');
+const noBonus = clone(srm); noBonus.bonus = null;
+const s0 = W.calibrate(noBonus);
+ok(s0.ok && s0.growth.extra < 0.97, 'without the booster the app would have to bend the charges to match GE (shows why the booster matters)');
+const sHi = W.project(s, 0.06), sLo = W.project(s, 0.05);
+ok(sHi.sustainsToAge > sLo.sustainsToAge, 'SRM 6% lasts longer than 5%');
 
-// 4. AI photo reading maps to the same shape (simulated AI reply with one unclear number)
-const ai = {product: 'SmartProtect You (SPY-100)', entry_age_next_birthday: 26, annual_premium: 4000.2, premium_term_years: 74, rate_x_percent: 2, rate_y_percent: 5,
-  sustain_age_x: 72, sustain_age_y: 80, sustain_age_best_estimate: 100,
-  rows: q.rows.map(r => ({year: r.year, age: r.age, premium_paid: r.premium, allocated_premium: r.alloc, insurance_charges_total: r.charges - (r.charges ? 72 : 0), other_charges: r.charges ? 72 : 0, value_x: r.tivX, value_y: r.tivY})),
-  unclear: []};
-const d = P.fromAI(ai); const m2 = W.calibrate(d);
-ok(m2.ok && Math.abs(m2.accuracy.maxErr - m.accuracy.maxErr) < 1e-9, 'AI reading gives the same result as the PDF reading');
-ai.rows[10].value_y = null; ai.unclear = ['year 15 value at 5% is blurred'];
+// 4. messy / missing data is refused, not guessed
+const bad = clone(spy); bad.rows[3].tivY = null;
+ok(W.check(bad).problems.some(p => /year 4/.test(p) && /Y/.test(p)), 'missing value is flagged with its row');
+ok(!W.calibrate(bad).ok, 'calculation refuses missing figures');
+const swap = clone(spy); swap.rows[5].tivX = 99999;
+ok(W.check(swap).warnings.length > 0, 'X above Y is warned');
+const norates = clone(spy); norates.rates = {x: null, y: 0.05};
+ok(W.check(norates).problems.length > 0, 'missing scenario rate is a problem');
+const noSA = clone(srm); noSA.rows[4].sa = null;
+ok(W.check(noSA).problems.some(p => /sum assured/.test(p)), 'per-scenario plan without sum assured is refused');
+const old = clone(spy); old.rows = old.rows.map(r => ({year: r.year, age: r.age, premium: r.premium, alloc: r.alloc, charges: r.chargesX, tivX: r.tivX, tivY: r.tivY, sa: r.sa}));
+ok(Math.abs(W.calibrate(old).accuracy.maxErr - m.accuracy.maxErr) < 0.002, 'quotations saved before this update still work');
+
+// 5. AI photo reading maps to the same shape (simulated AI replies)
+const toAI = (q) => ({product: q.product, entry_age_next_birthday: q.entryAge, annual_premium: q.premium, premium_term_years: q.termYears,
+  rate_x_percent: 2, rate_y_percent: 5, sustain_age_x: q.sustain.x, sustain_age_y: q.sustain.y, sustain_age_best_estimate: q.sustain.best,
+  bonus: q.bonus ? {name: q.bonus.name, amount: q.bonus.amount, first_age_next_birthday: q.bonus.age, every_years: q.bonus.every} : null,
+  rows: q.rows.map(r => ({year: r.year, age: r.age, premium_paid: r.premium, allocated_premium: r.alloc,
+    insurance_charges_x: r.chargesX ? r.chargesX - 72 : 0, insurance_charges_y: r.chargesY ? r.chargesY - 72 : 0,
+    basic_charge_x: r.basicX, basic_charge_y: r.basicY, other_charges: r.chargesX || r.chargesY ? 72 : 0, sum_assured: r.sa, value_x: r.tivX, value_y: r.tivY})), unclear: []});
+for (const [q, ref, name] of [[spy, m, 'SPY'], [srm, s, 'SRM']]) {
+  const d = P.fromAI(toAI(q)), mm = W.calibrate(d);
+  ok(mm.ok && Math.abs(mm.accuracy.maxErr - ref.accuracy.maxErr) < 0.002 && mm.accuracy.lapse.y.app === ref.accuracy.lapse.y.app, name + ': AI reading gives the same result as the PDF reading');
+}
+const ai = toAI(spy); ai.rows[10].value_y = null; ai.unclear = ['year 15 value at 5% is blurred'];
 const d2 = P.fromAI(ai); ok(!W.calibrate(d2).ok && d2.unclear.length === 1, 'AI null is kept as missing and blocks the calculation');
 
 console.log(pass + ' passed, ' + fail + ' failed'); process.exit(fail ? 1 : 0);

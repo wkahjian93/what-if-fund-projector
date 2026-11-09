@@ -1,84 +1,122 @@
 /* What-If Fund Projector: calculation engine (works in the browser and in Node).
    Re-creates an investment-linked quotation's fund value from its own table, checks that it matches
-   the quotation's 2% / 5% figures, then projects any other return.
+   the quotation's X% / Y% figures, then projects any other return.
 
-   Model, per policy month (premium mode monthly; charges are deducted monthly):
-     fund += allocated premium / 12 - (insurance + other charges) / 12
-     if fund < 0 -> the policy is no longer sustainable (lapse)
-     fund *= (1 + r * (1 - tax)) ^ (1/12)        r = gross fund return, same basis as the quotation's X% / Y%
-     fund -= fund * fmc / 12                      fmc = fund management charge
-   tax and fmc are fitted to the quotation's own year-by-year figures (Malaysian ILP funds pay 8% tax on income). */
+   Model, per policy month (charges are deducted monthly):
+     charge = fixed / 12 + q / 12 * max(sumAssured - fund, 0)
+        fixed = charges that do not depend on the fund (riders, policy fee; for "sum assured + fund" death benefits, all of them)
+        q     = insurance rate per RM of sum at risk, for "higher of sum assured or fund" death benefits (0 otherwise)
+     fund += allocated premium / 12 - charge          (fund < 0 -> no longer sustainable)
+     fund *= (1 + r * (1 - tax)) ^ (1/12);  fund -= fund * fmc / 12
+   tax and fmc are fitted to the quotation's own year-by-year figures.
+
+   Two GE quotations (SmartProtect You, Smart Revive Max) give the same shape for q by age: it rises about 8-9% a year
+   from age 50 to 76. That is used as the reference when a quotation stops printing charges. */
 (function (root) {
   'use strict';
 
   const num = v => (v === null || v === undefined || v === '' || !isFinite(+v)) ? null : +v;
+  const REF_Q_GROWTH = 1.085; // GE insurance rate per RM at risk, yearly rise by age (ages 50-76, two GE quotations)
 
-  function yearStep(F, alloc, charges, r, p) {
+  function yearStep(F, pl, r, p) {
     const g = Math.pow(1 + r * (1 - p.tax), 1 / 12);
-    let fmcPaid = 0;
     for (let m = 0; m < 12; m++) {
-      F += alloc / 12 - charges / 12;
-      if (F < 0) return {F: 0, lapsed: true, month: m, fmc: fmcPaid};
-      F *= g;
-      const c = F * p.fmc / 12; fmcPaid += c; F -= c;
+      const chg = pl.fixed / 12 + (pl.q ? pl.q / 12 * Math.max(pl.sa - F, 0) : 0);
+      F += pl.alloc / 12 - chg;
+      if (F < 0) return {F: 0, lapsed: true, month: m};
+      F *= g; F -= F * p.fmc / 12;
     }
-    return {F, lapsed: false, fmc: fmcPaid};
+    return {F: F + (pl.bonus || 0), lapsed: false};
+  }
+
+  /* Normalise rows (older saves have a single "charges" column). */
+  function normRows(q) {
+    return (q.rows || []).map(r => {
+      const o = {year: num(r.year), age: num(r.age), premium: num(r.premium), alloc: num(r.alloc), sa: num(r.sa),
+        tivX: num(r.tivX), tivY: num(r.tivY), basicX: num(r.basicX), basicY: num(r.basicY),
+        chargesX: num(r.chargesX), chargesY: num(r.chargesY)};
+      if (o.chargesX === null && o.chargesY === null && num(r.charges) !== null) o.chargesX = o.chargesY = num(r.charges);
+      if (o.chargesY === null && o.chargesX !== null && r.chargesY === undefined) o.chargesY = o.chargesX;
+      return o;
+    });
   }
 
   /* Clean and check the table. Returns {rows, problems[], warnings[]} */
   function check(q) {
     const problems = [], warnings = [];
-    const rows = (q.rows || []).map(r => ({
-      year: num(r.year), age: num(r.age), premium: num(r.premium), alloc: num(r.alloc), charges: num(r.charges),
-      tivX: num(r.tivX), tivY: num(r.tivY), sa: num(r.sa)
-    }));
+    const rows = normRows(q);
     const rx = num(q.rates && q.rates.x), ry = num(q.rates && q.rates.y);
     if (rx === null || ry === null || rx <= -0.5 || ry <= -0.5) problems.push('The two illustrated returns (Scenario X and Y) are missing.');
-    else if (q.rates.x >= q.rates.y) problems.push('Scenario X should be the lower return and Y the higher one.');
+    else if (rx >= ry) problems.push('Scenario X should be the lower return and Y the higher one.');
     if (rows.length < 3) problems.push('Need at least 3 rows of the yearly table.');
     let lastYear = 0;
     rows.forEach((r, i) => {
       const at = 'Row ' + (i + 1) + (r.year ? ' (year ' + r.year + ')' : '');
-      for (const k of ['year', 'alloc', 'charges', 'tivX', 'tivY']) if (r[k] === null) problems.push(at + ': ' + LABEL[k] + ' is missing or unclear.');
-      if (r.year !== null) {
-        if (r.year <= lastYear) problems.push(at + ': policy years must go up.');
-        lastYear = r.year;
-      }
-      if (r.tivX !== null && r.tivY !== null && r.tivX > r.tivY + 1 && q.rates && q.rates.x < q.rates.y) warnings.push(at + ': the X value is above the Y value. Check the reading.');
+      for (const k of ['year', 'alloc', 'chargesX', 'chargesY', 'tivX', 'tivY']) if (r[k] === null) problems.push(at + ': ' + LABEL[k] + ' is missing or unclear.');
+      if (r.year !== null) { if (r.year <= lastYear) problems.push(at + ': policy years must go up.'); lastYear = r.year; }
+      if (r.tivX !== null && r.tivY !== null && r.tivX > r.tivY + 1 && rx < ry) warnings.push(at + ': the X value is above the Y value. Check the reading.');
       if (r.alloc !== null && r.premium !== null && r.alloc > r.premium * 1.2 + 1) warnings.push(at + ': allocated premium is above premium paid. Check the reading.');
     });
+    const level = isLevel(rows);
+    if (level && rows.some(r => (r.chargesX > 0 || r.chargesY > 0) && !(r.sa > 0))) problems.push('Charges change with the fund value in this plan, so the sum assured column is needed for every row with charges.');
     const ages = rows.filter(r => r.year !== null && r.age !== null).map(r => r.age - r.year);
     if (ages.length && ages.some(a => a !== ages[0])) warnings.push('Ages do not move one-for-one with policy years. Check the age column.');
     if (!ages.length && !(num(q.entryAge) > 0)) problems.push('The age column (or the entry age) is missing.');
-    return {rows, problems, warnings};
+    return {rows, problems, warnings, level};
   }
-  const LABEL = {year: 'policy year', alloc: 'allocated premium', charges: 'insurance + other charges', tivX: 'value at X%', tivY: 'value at Y%'};
+  const LABEL = {year: 'policy year', alloc: 'allocated premium', chargesX: 'charges at X%', chargesY: 'charges at Y%', tivX: 'value at X%', tivY: 'value at Y%'};
+
+  /* "Higher of sum assured or fund" plans: charges differ between X and Y while both funds are alive. */
+  function isLevel(rows) {
+    return rows.some(r => r.tivX > 0 && r.tivY > 0 && ((r.basicX !== null && r.basicY !== null && Math.abs(r.basicX - r.basicY) >= 2) ||
+      (r.chargesX !== null && r.chargesY !== null && Math.abs(r.chargesX - r.chargesY) >= 2)));
+  }
+
+  /* Turn each printed row into {fixed, q}. */
+  function rowCosts(rows, level) {
+    const byYear = {}; rows.forEach(r => byYear[r.year] = r);
+    return rows.map(r => {
+      if (!level) return {fixed: Math.max(r.chargesX || 0, r.chargesY || 0), q: 0};
+      const prev = r.year === 1 ? {tivX: 0, tivY: 0} : byYear[r.year - 1];
+      const qs = [], fixeds = [];
+      for (const k of ['X', 'Y']) {
+        const ch = r['charges' + k], F1 = r['tiv' + k];
+        if (!(ch > 0) || !(F1 > 0)) continue;
+        const Fbar = prev && prev['tiv' + k] !== null && prev['tiv' + k] !== undefined ? (prev['tiv' + k] + F1) / 2 : F1;
+        const atRisk = Math.max(r.sa - Fbar, 1);
+        const basic = r['basic' + k];
+        if (basic !== null && basic !== undefined) { qs.push(basic / atRisk); fixeds.push(ch - basic); }
+      }
+      if (!qs.length) { // no split given: use the X / Y difference
+        const FX = r.tivX, FY = r.tivY;
+        if (r.chargesX > 0 && r.chargesY > 0 && FY - FX > 2000) {
+          const q = (r.chargesX - r.chargesY) / (FY - FX);
+          return {fixed: Math.max(0, r.chargesX - q * (r.sa - FX)), q: Math.max(0, q)};
+        }
+        const ch = Math.max(r.chargesX || 0, r.chargesY || 0), F = r.chargesY >= r.chargesX ? r.tivY : r.tivX;
+        return {fixed: 0, q: ch > 0 ? ch / Math.max(r.sa - (F || 0), 1) : 0, rough: true};
+      }
+      return {fixed: Math.max(0, fixeds.reduce((a, b) => a + b, 0) / fixeds.length), q: qs.reduce((a, b) => a + b, 0) / qs.length};
+    });
+  }
 
   /* Fit tax and fund charge on consecutive years. */
-  function fitCosts(rows, rates) {
-    const pairs = [];
-    const byYear = {}; rows.forEach(r => byYear[r.year] = r);
-    rows.forEach(r => {
-      const prev = r.year === 1 ? {tivX: 0, tivY: 0} : byYear[r.year - 1];
-      if (!prev) return;
+  function fitCosts(rows, costs, rates, bonusAt) {
+    const pairs = [], byYear = {};
+    rows.forEach((r, i) => byYear[r.year] = i);
+    rows.forEach((r, i) => {
+      const prev = r.year === 1 ? {tivX: 0, tivY: 0} : rows[byYear[r.year - 1]];
+      if (!prev || byYear[r.year - 1] === undefined && r.year !== 1) return;
+      const pl = {alloc: r.alloc, fixed: costs[i].fixed, q: costs[i].q, sa: r.sa || 0, bonus: bonusAt(r.year)};
       for (const [k, rate] of [['tivX', rates.x], ['tivY', rates.y]]) {
-        if (r[k] > 50 && (prev[k] > 0 || r.year === 1)) pairs.push([prev[k], r.alloc, r.charges, rate, r[k]]);
+        if (r[k] > 50 && (prev[k] > 0 || r.year === 1)) pairs.push([prev[k], pl, rate, r[k]]);
       }
     });
     if (pairs.length < 4) return {tax: 0.08, fmc: 0.0075, fitted: false, pairs: pairs.length};
-    const err = (tax, fmc) => {
-      let e = 0;
-      for (const [F0, a, c, r, F1] of pairs) {
-        const s = yearStep(F0, a, c, r, {tax, fmc});
-        const d = (s.F - F1) / Math.max(F1, 500); e += d * d;
-      }
-      return e;
-    };
+    const err = (tax, fmc) => { let e = 0; for (const [F0, pl, r, F1] of pairs) { const s = yearStep(F0, pl, r, {tax, fmc}); const d = (s.F - F1) / Math.max(F1, 500); e += d * d; } return e; };
     let best = [0.08, 0.0075, Infinity];
-    for (let t = 0; t <= 0.25001; t += 0.01) for (let f = 0; f <= 0.03001; f += 0.0005) {
-      const e = err(t, f); if (e < best[2]) best = [t, f, e];
-    }
-    for (let step of [0.004, 0.001, 0.0003]) {
+    for (let t = 0; t <= 0.25001; t += 0.01) for (let f = 0; f <= 0.03001; f += 0.0005) { const e = err(t, f); if (e < best[2]) best = [t, f, e]; }
+    for (const step of [0.004, 0.001, 0.0003]) {
       const [t0, f0] = best;
       for (let t = t0 - step * 3; t <= t0 + step * 3; t += step) for (let f = f0 - step; f <= f0 + step; f += step / 4) {
         if (t < 0 || f < 0) continue; const e = err(t, f); if (e < best[2]) best = [t, f, e];
@@ -87,40 +125,59 @@
     return {tax: best[0], fmc: best[1], fitted: true, pairs: pairs.length, rms: Math.sqrt(best[2] / pairs.length)};
   }
 
-  /* Build a full year-by-year plan (allocated premium and charges for every policy year). */
+  function runPlan(plan, termYears, r, p) {
+    let F = 0; const years = [];
+    for (let y = 1; y <= termYears; y++) {
+      const pl = plan[y];
+      const st = yearStep(F, pl, r, p);
+      if (st.lapsed) return {years, lapseYear: y};
+      F = st.F;
+      years.push({year: y, fund: F, src: pl.src});
+    }
+    return {years, lapseYear: null};
+  }
+
   function calibrate(q) {
     const chk = check(q);
     if (chk.problems.length) return {ok: false, problems: chk.problems, warnings: chk.warnings};
     const rates = {x: +q.rates.x, y: +q.rates.y};
-    /* drop the all-zero rows the quotation prints after the fund has run out in both scenarios */
     let rows = chk.rows.slice();
-    const dataEnd = rows.length - 1 - rows.slice().reverse().findIndex(r => r.tivX > 0 || r.tivY > 0 || r.charges > 0);
     const lastPrinted = rows[rows.length - 1];
-    rows = rows.slice(0, dataEnd + 1);
+    const live = r => r.tivX > 0 || r.tivY > 0 || r.chargesX > 0 || r.chargesY > 0;
+    rows = rows.slice(0, rows.length - rows.slice().reverse().findIndex(live));
+    const level = chk.level;
+    const costs = rowCosts(rows, level);
     const entryAge = num(q.entryAge) !== null ? +q.entryAge : (rows[0].age - rows[0].year);
     const termYears = Math.max(num(q.termYears) || 0, lastPrinted.year);
-    const costs = fitCosts(rows, rates);
-    const p = {tax: costs.tax, fmc: costs.fmc};
+    /* bonus / booster credited into the fund at the policy anniversary of the stated age (age next birthday) */
+    const b = q.bonus && num(q.bonus.amount) > 0 && num(q.bonus.age) > 0 ? q.bonus : null;
+    const bonusAt = y => { if (!b) return 0; const age = entryAge + y, k = age - b.age; return k === 0 || (k > 0 && num(b.every) > 0 && k % b.every === 0) ? +b.amount : 0; };
+    const fit = fitCosts(rows, costs, rates, bonusAt);
+    const p = {tax: fit.tax, fmc: fit.fmc};
 
-    const plan = {}; // year -> {alloc, charges, src: 'quote'|'between'|'after'}
-    const sameShape = (a, b) => a > 0 && b > 0;
-    if (rows[0].year > 1) for (let y = 1; y < rows[0].year; y++) plan[y] = {alloc: rows[0].alloc, charges: rows[0].charges, src: 'between'};
-    rows.forEach(r => plan[r.year] = {alloc: r.alloc, charges: r.charges, src: 'quote'});
+    const plan = {};
+    const put = (y, alloc, fixed, qq, sa, src) => plan[y] = {alloc, fixed, q: qq, sa: sa || 0, src, bonus: bonusAt(y)};
+    if (rows[0].year > 1) for (let y = 1; y < rows[0].year; y++) put(y, rows[0].alloc, costs[0].fixed, costs[0].q, rows[0].sa, 'between');
+    rows.forEach((r, i) => put(r.year, r.alloc, costs[i].fixed, costs[i].q, r.sa, 'quote'));
+    const geo = (a, b, t) => a > 0 && b > 0 ? a * Math.pow(b / a, t) : a + (b - a) * t;
+
+    /* years the quotation skips: fill between printed years, then scale so GE's own X / Y values come out right */
     const scales = [];
     for (let i = 1; i < rows.length; i++) {
-      const a = rows[i - 1], b = rows[i];
+      const a = rows[i - 1], b = rows[i], ca = costs[i - 1], cb = costs[i];
       if (b.year - a.year < 2) continue;
       const ys = []; for (let y = a.year + 1; y < b.year; y++) ys.push(y);
-      const base = y => sameShape(a.charges, b.charges) ? a.charges * Math.pow(b.charges / a.charges, (y - a.year) / (b.year - a.year)) : a.charges + (b.charges - a.charges) * (y - a.year) / (b.year - a.year);
       const alloc = Math.min(a.alloc, b.alloc);
-      const fill = s => ys.forEach(y => plan[y] = {alloc, charges: base(y) * s, src: 'between'});
+      /* if one end has no charges (fund already gone in both scenarios there), carry the other end */
+      const fa = ca.fixed, fb = cb.fixed || ca.fixed, qa = ca.q, qb = cb.q || ca.q;
+      const fill = s => ys.forEach(y => { const t = (y - a.year) / (b.year - a.year); put(y, alloc, geo(fa, fb, t) * s, geo(qa, qb, t) * s, a.sa + ((b.sa || a.sa) - a.sa) * t, 'between'); });
       const cands = [['tivX', rates.x], ['tivY', rates.y]].filter(([k]) => a[k] > 0 && b[k] > 0);
       if (!cands.length) { fill(1); continue; }
       const err = s => {
         fill(s); let e = 0;
         for (const [k, r] of cands) {
           let F = a[k], dead = false;
-          for (let y = a.year + 1; y <= b.year; y++) { const st = yearStep(F, plan[y].alloc, plan[y].charges, r, p); if (st.lapsed) { dead = true; break; } F = st.F; }
+          for (let y = a.year + 1; y <= b.year; y++) { const st = yearStep(F, plan[y], r, p); if (st.lapsed) { dead = true; break; } F = st.F; }
           e += dead ? -5 : Math.log(Math.max(F, 1) / b[k]);
         }
         return e;
@@ -130,57 +187,64 @@
       const s = (lo + hi) / 2; fill(s); scales.push({from: a.year, to: b.year, scale: s});
     }
 
-    /* years after the last printed figures: charges keep growing at the last printed pace,
-       tuned so the app's run-out ages match the quotation's "may sustain ... up to age N" lines */
-    const last = rows[rows.length - 1];
-    const prev = rows.slice(0, -1).reverse().find(r => r.charges > 0 && r.year < last.year);
-    let g0 = prev && last.charges > 0 ? Math.pow(last.charges / prev.charges, 1 / (last.year - prev.year)) : 1.05;
-    const lastPremRow = rows.slice().reverse().find(r => r.alloc > 0) || last;
-    const fillAfter = g => { for (let y = last.year + 1; y <= termYears; y++) plan[y] = {alloc: lastPremRow.alloc, charges: last.charges * Math.pow(g, y - last.year), src: 'after'}; };
-    fillAfter(g0);
-    const targets = [];
-    const sus = q.sustain || {};
+    /* after the last printed charges: each part keeps its own printed pace (the insurance rate uses the GE reference
+       when the plan's own figures stop before age 50), times one extra factor tuned so the run-out ages match the
+       quotation's "policy may sustain ... up to age N" lines */
+    const li = rows.length - 1, last = rows[li], cl = costs[li];
+    const pi = rows.slice(0, li).map((r, i) => i).reverse().find(i => costs[i].fixed > 0 || costs[i].q > 0);
+    const gap = pi === undefined ? 1 : last.year - rows[pi].year;
+    const cp = pi === undefined ? cl : costs[pi];
+    const clampG = g => Math.min(1.25, Math.max(1, g));
+    const gF = cp.fixed > 0 && cl.fixed > 0 ? clampG(Math.pow(cl.fixed / cp.fixed, 1 / gap)) : 1;
+    const ownQ = cp.q > 0 && cl.q > 0 ? Math.pow(cl.q / cp.q, 1 / gap) : null;
+    const gQ = ownQ && pi !== undefined && entryAge + rows[pi].year >= 45 ? clampG(ownQ) : REF_Q_GROWTH;
+    const lastSA = last.sa || (rows.slice().reverse().find(r => r.sa > 0) || {}).sa || 0;
+    const allocAfter = (rows.slice().reverse().find(r => r.alloc > 0) || {alloc: 0});
+    const premiumEnds = rows.some(r => r.premium === 0 && r.alloc === 0 && live(r)); // limited-pay plans
+    const fillAfter = (plan, e, fromYear, e2) => {
+      for (let y = last.year + 1; y <= termYears; y++) {
+        const t = y - last.year, t1 = Math.min(t, Math.max(0, fromYear - last.year)), t2 = t - t1;
+        const ef = Math.pow(e, t1) * Math.pow(e2, t2);
+        plan[y] = {alloc: premiumEnds ? 0 : allocAfter.alloc, fixed: cl.fixed * Math.pow(gF, t) * ef, q: cl.q * Math.pow(gQ, t) * ef, sa: lastSA, src: 'after', bonus: bonusAt(y)};
+      }
+    };
+    fillAfter(plan, 1, termYears, 1);
+    const targets = [], sus = q.sustain || {};
     for (const [k, r] of [['x', rates.x], ['y', rates.y]]) {
-      const age = num(sus[k]);
-      if (age === null) continue;
-      const years = age - entryAge; // last sustained policy year
+      const age = num(sus[k]); if (age === null) continue;
+      const years = age - entryAge;
       if (years > last.year && years < termYears) targets.push({k, r, years});
     }
-    let gUsed = g0, tuned = false;
+    let e = 1, anchorYear = last.year;
     if (targets.length) {
-      const lapseYear = (g, r) => { fillAfter(g); return runPlan(plan, termYears, r, p).lapseYear || termYears + 1; };
-      const gs = targets.map(t => {
-        // lapse year falls as g rises: find g where last sustained year == target
-        let lo = 0.9, hi = 1.6;
+      const lapseYear = (ee, r) => { fillAfter(plan, ee, termYears, ee); return runPlan(plan, termYears, r, p).lapseYear || termYears + 1; };
+      const es = targets.map(t => {
+        let lo = 0.85, hi = 1.4;
         for (let k = 0; k < 50; k++) { const m = (lo + hi) / 2; (lapseYear(m, t.r) - 1 > t.years) ? lo = m : hi = m; }
-        const gHi = hi; lo = 0.9; hi = 1.6;
+        const eHi = hi; lo = 0.85; hi = 1.4;
         for (let k = 0; k < 50; k++) { const m = (lo + hi) / 2; (lapseYear(m, t.r) - 1 >= t.years) ? lo = m : hi = m; }
-        return Math.sqrt(gHi * lo); // middle of the range that gives the stated year
+        return Math.sqrt(eHi * lo);
       });
-      gUsed = gs.reduce((a, b) => a * b, 1) ** (1 / gs.length); tuned = true;
+      e = es.reduce((a, b) => a * b, 1) ** (1 / es.length);
+      anchorYear = Math.max(...targets.map(t => t.years + 1));
     }
-    fillAfter(gUsed);
+    /* main plan: the tuned pace continues (careful view). Other view: after the last age GE's figures pin down,
+       charges go back to the printed pace. */
+    fillAfter(plan, e, termYears, e);
+    const planTrend = Object.assign({}, plan);
+    fillAfter(planTrend, e, anchorYear, Math.min(1, e));
 
-    const model = {ok: true, q, rates, entryAge, termYears, plan, costs, p, scales, growthAfter: gUsed, growthTuned: tuned,
-      lastDataYear: last.year, rows: chk.rows, warnings: chk.warnings, sustain: sus};
+    const model = {ok: true, q, rates, entryAge, termYears, plan, planTrend, level, costs: fit, p, scales,
+      growth: {fixed: gF, q: gQ, qFromRef: gQ === REF_Q_GROWTH && cl.q > 0, extra: e, total: null}, growthTuned: !!targets.length,
+      anchorAge: entryAge + anchorYear, bonus: b, lastDataYear: last.year, rows: chk.rows, warnings: chk.warnings, sustain: sus, premiumEnds};
+    const mid = plan[Math.min(termYears, last.year + 5)];
+    model.growth.total = last.year < termYears && mid ? Math.pow((mid.fixed + mid.q * lastSA * 0.9) / Math.max(1, cl.fixed + cl.q * lastSA * 0.9), 1 / Math.min(5, termYears - last.year)) : 1;
     model.accuracy = accuracy(model);
     return model;
   }
 
-  function runPlan(plan, termYears, r, p) {
-    let F = 0, paid = 0, chargesPaid = 0; const years = [];
-    for (let y = 1; y <= termYears; y++) {
-      const pl = plan[y];
-      const st = yearStep(F, pl.alloc, pl.charges, r, p);
-      if (st.lapsed) return {years, lapseYear: y};
-      F = st.F; chargesPaid += pl.charges;
-      years.push({year: y, fund: F, charges: pl.charges, src: pl.src});
-    }
-    return {years, lapseYear: null};
-  }
-
-  function project(model, r) {
-    const out = runPlan(model.plan, model.termYears, r, model.p);
+  function project(model, r, trend) {
+    const out = runPlan(trend ? model.planTrend : model.plan, model.termYears, r, model.p);
     out.years.forEach(y => y.age = model.entryAge + y.year);
     const lastAge = out.lapseYear ? model.entryAge + out.lapseYear - 1 : model.entryAge + model.termYears;
     return {rate: r, years: out.years, lapseYear: out.lapseYear, sustainsToAge: lastAge, sustainsYears: out.lapseYear ? out.lapseYear - 1 : model.termYears,
@@ -189,9 +253,9 @@
   }
 
   /* Lowest return that keeps the policy going to targetAge (default: end of coverage). */
-  function minReturn(model, targetAge) {
-    const target = (targetAge || model.entryAge + model.termYears);
-    const ok = r => project(model, r).sustainsToAge >= target;
+  function minReturn(model, targetAge, trend) {
+    const target = targetAge || model.entryAge + model.termYears;
+    const ok = r => project(model, r, trend).sustainsToAge >= target;
     let lo = -0.05, hi = 0.4;
     if (!ok(hi)) return null; if (ok(lo)) return lo;
     for (let k = 0; k < 50; k++) { const m = (lo + hi) / 2; ok(m) ? hi = m : lo = m; }
@@ -208,22 +272,18 @@
         const ge = r['tiv' + k], app = pr.fundAt(line.age);
         line['ge' + k] = ge; line['app' + k] = app === null ? 0 : app;
         if (ge >= 2000) {
-          const e = Math.abs(line['app' + k] - ge) / ge;
-          line['err' + k] = e;
+          const e = Math.abs(line['app' + k] - ge) / ge; line['err' + k] = e;
           if (e > res.maxErr) { res.maxErr = e; res.worst = {year: r.year, scen: k}; }
         } else if (ge === 0 && line['app' + k] > 2000) { line['err' + k] = 1; res.maxErr = Math.max(res.maxErr, 1); res.worst = {year: r.year, scen: k}; }
       }
       res.rows.push(line);
     }
-    res.lapse = {
-      x: {ge: num(model.sustain.x), app: px.sustainsToAge, full: px.fullTerm},
-      y: {ge: num(model.sustain.y), app: py.sustainsToAge, full: py.fullTerm}
-    };
+    res.lapse = {x: {ge: num(model.sustain.x), app: px.sustainsToAge, full: px.fullTerm}, y: {ge: num(model.sustain.y), app: py.sustainsToAge, full: py.fullTerm}};
     res.lapseMatch = ['x', 'y'].every(k => res.lapse[k].ge === null || Math.abs(res.lapse[k].ge - res.lapse[k].app) <= 1);
     res.grade = res.maxErr <= 0.03 && res.lapseMatch ? 'good' : res.maxErr <= 0.08 ? 'fair' : 'poor';
     return res;
   }
 
-  const api = {yearStep, check, calibrate, project, minReturn, accuracy};
+  const api = {yearStep, check, calibrate, project, minReturn, accuracy, REF_Q_GROWTH};
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.WIF = api;
 })(typeof self !== 'undefined' ? self : this);

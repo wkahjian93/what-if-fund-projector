@@ -34,20 +34,39 @@
     const page = L[tIdx], text = all[tIdx], front = all.slice(0, tIdx + 1).join('\n');
     const rx = text.match(/(\d+(?:\.\d+)?)%\W{0,6}Scenario X/), ry = text.match(/(\d+(?:\.\d+)?)%\W{0,6}Scenario Y/);
     const rows = [];
+    /* Insurance charges are printed either once per row (death benefit = sum assured + fund: same in X and Y)
+       or once per scenario (death benefit = higher of sum assured or fund: Basic X, Basic Y, Rider X, Rider Y). */
+    const firstData = page.findIndex(l => { const n = numTokens(l); return n && n.length >= 15; });
+    const header = page.slice(0, Math.max(0, firstData)).join(' ');
+    const scenWords = (header.replace(/[^\n]*examples of investment returns[^\n]*/i, '').match(/Scenario/g) || []).length;
     for (const line of page) {
       const n = numTokens(line);
       if (!n || n.length < 15) continue;
       /* GE layout: year, age, premium, allocated, alloc %, insurance charge column(s)..., other, FMC X, FMC Y,
          sum assured, value X, value Y, death benefit X, death benefit Y, commission, commission % */
-      const e = n.length, ins = n.slice(5, e - 10);
-      rows.push({year: n[0], age: n[1], premium: n[2], alloc: n[3], charges: ins.reduce((a, b) => a + b, 0) + n[e - 10],
+      const e = n.length, ins = n.slice(5, e - 10), other = n[e - 10];
+      const perScen = ins.length >= 2 && ins.length % 2 === 0 && scenWords >= 9;
+      let bX, bY, cX, cY;
+      if (perScen) {
+        const xs = ins.filter((v, i) => i % 2 === 0), ys = ins.filter((v, i) => i % 2 === 1);
+        bX = xs[0]; bY = ys[0]; cX = xs.reduce((a, b) => a + b, 0) + other; cY = ys.reduce((a, b) => a + b, 0) + other;
+      } else {
+        bX = bY = ins[0]; cX = cY = ins.reduce((a, b) => a + b, 0) + other;
+      }
+      rows.push({year: n[0], age: n[1], premium: n[2], alloc: n[3], basicX: bX, basicY: bY, chargesX: cX, chargesY: cY,
         fmcX: n[e - 9], fmcY: n[e - 8], sa: n[e - 7], tivX: n[e - 6], tivY: n[e - 5]});
     }
     if (rows.length < 3) return {ok: false, reason: 'no_rows'};
     const pick = re => { const m = front.match(re); return m ? m[1].trim() : null; };
     const pLine = front.split('\n').find(l => /Product Name/.test(l)) || '';
     const product = (pLine.replace(/.*?Product Name/, '').split('|').map(s => s.replace(/[:=]/g, ' ').trim()).find(Boolean) || '')
-      .replace(/^\d{3,5}\s+/, '').replace(/\s+(\S+-\d+)$/, ' ($1)').trim() || null;
+      .replace(/^\d{3,5}\s+/, '').replace(/\s+/g, ' ').replace(/\s([A-Z][A-Z0-9]*(?:-\d+)?)$/, ' ($1)').trim() || null;
+    /* bonus credited into the fund, e.g. "Booster reward of RM25,000.00 will be credited into your total investment value
+       on the policy anniversary of age 65 years next birthday, and every 10 years thereafter" */
+    const notesText = all.slice(0, Math.min(all.length, tIdx + 3)).join(' ').replace(/[\s|]+/g, ' ');
+    const bm = notesText.match(/(Booster reward|Loyalty bonus|[A-Z][a-z]+ bonus|[A-Z][a-z]+ reward)\s+of\s+RM\s?([\d,]+(?:\.\d+)?)\s+will be credited[^.]*?age\s+(\d+)\s+years next birthday(?:,?\s+and every\s+(\d+)\s+years thereafter)?/i);
+    const bonus = bm ? {name: bm[1].replace(/\s+/g, ' '), amount: toNum(bm[2]), age: +bm[3], every: bm[4] ? +bm[4] : null} : null;
+    if (/booster|loyalty bonus|bonus will be credited|reward will be credited/i.test(notesText) && !bonus) notes.push('The quotation mentions a booster or bonus that the app could not read. Type it in below if it adds to the fund.');
     const sus = {};
     const susRe = /(\d+)\s+years up to your age\s+(\d+)\s+years next birthday under ([^;\n.]+)/g;
     let m; while ((m = susRe.exec(front))) {
@@ -64,7 +83,7 @@
       source: 'pdf', product: product || 'Investment-linked plan', fund: funds ? funds.trim() : null,
       entryAge: ageNB ? +ageNB : rows[0].age - rows[0].year, premium: prem ? toNum(prem) : rows[0].premium, mode: mode || null,
       termYears: Math.max(term ? +term : 0, rows[rows.length - 1].year),
-      rates: {x: rx ? +rx[1] / 100 : null, y: ry ? +ry[1] / 100 : null}, sustain: sus, rows
+      rates: {x: rx ? +rx[1] / 100 : null, y: ry ? +ry[1] / 100 : null}, sustain: sus, bonus, rows
     };
     if (!rx || !ry) notes.push('The two illustrated returns were not found. Please type them in.');
     return {ok: true, data, notes, page: tIdx + 1};
@@ -72,24 +91,27 @@
 
   /* ---------- AI photo reading ---------- */
   const aiPrompt = () => `You are reading photos of a Malaysian investment-linked life insurance quotation (benefit illustration), usually Great Eastern.
-Find the main yearly table ("Table 1") that shows, for each policy year: premium paid, allocated premium, insurance charges (basic plan and unit-deducting riders), other charges, fund management charge for Scenario X and Y, sum assured, and the non-guaranteed total investment value for Scenario X and Scenario Y.
-Also look for: the product name, the life assured's age next birthday, the annualised premium, premium payment term, the two illustrated returns (e.g. 2% Scenario X, 5% Scenario Y), and the lines "the policy may sustain for N years up to your age A ... under projected investment returns of X% / Y% / best estimate".
+Find the main yearly table ("Table 1") that shows, for each policy year: premium paid, allocated premium, insurance charges (basic plan and unit-deducting riders; some plans print them separately for Scenario X and Scenario Y), other charges, fund management charge for Scenario X and Y, sum assured, and the non-guaranteed total investment value for Scenario X and Scenario Y.
+Also look for: the product name, the life assured's age next birthday, the annualised premium, premium payment term, the two illustrated returns (e.g. 2% Scenario X, 5% Scenario Y), the lines "the policy may sustain for N years up to your age A ... under projected investment returns of X% / Y% / best estimate", and any booster / loyalty bonus credited into the investment value (amount, the age next birthday it is first credited, and "every N years thereafter" if stated).
 Return ONLY JSON:
 {"product": string|null, "entry_age_next_birthday": number|null, "annual_premium": number|null, "premium_term_years": number|null,
  "rate_x_percent": number|null, "rate_y_percent": number|null,
  "sustain_age_x": number|null, "sustain_age_y": number|null, "sustain_age_best_estimate": number|null,
+ "bonus": {"name": string, "amount": number, "first_age_next_birthday": number, "every_years": number|null} | null,
  "rows": [{"year": number, "age": number|null, "premium_paid": number|null, "allocated_premium": number|null,
-   "insurance_charges_total": number|null, "other_charges": number|null, "fmc_x": number|null, "fmc_y": number|null,
+   "insurance_charges_x": number|null, "insurance_charges_y": number|null, "basic_charge_x": number|null, "basic_charge_y": number|null, "other_charges": number|null, "fmc_x": number|null, "fmc_y": number|null,
    "sum_assured": number|null, "value_x": number|null, "value_y": number|null}],
  "unclear": [string]}
-Rules: copy numbers exactly as printed, without commas. insurance_charges_total = basic plan insurance charge + all unit-deducting rider charges in that row (not the fund management charge). Include every printed policy-year row, including rows of zeros. If a number is blurred, cut off or you are not sure, put null and say which in "unclear". Never guess or calculate a missing number. Do not return the client's name or IC number.`;
+Rules: copy numbers exactly as printed, without commas. insurance_charges_x / _y = basic plan insurance charge + all unit-deducting rider charges for that scenario (not the fund management charge); if the table prints one set of insurance charges for both scenarios, put the same numbers in _x and _y. basic_charge_x / _y = the basic plan part only. Include every printed policy-year row, including rows of zeros. If a number is blurred, cut off or you are not sure, put null and say which in "unclear". Never guess or calculate a missing number. Do not return the client's name or IC number.`;
 
   function fromAI(j) {
     const n = v => (v === null || v === undefined || v === '' || !isFinite(+v)) ? null : +v;
     const rows = (j.rows || []).map(r => {
-      const ins = n(r.insurance_charges_total), oth = n(r.other_charges);
+      const ix = n(r.insurance_charges_x !== undefined ? r.insurance_charges_x : r.insurance_charges_total),
+        iy = n(r.insurance_charges_y !== undefined ? r.insurance_charges_y : r.insurance_charges_total), oth = n(r.other_charges);
       return {year: n(r.year), age: n(r.age), premium: n(r.premium_paid), alloc: n(r.allocated_premium),
-        charges: ins === null || oth === null ? null : ins + oth, fmcX: n(r.fmc_x), fmcY: n(r.fmc_y), sa: n(r.sum_assured),
+        chargesX: ix === null || oth === null ? null : ix + oth, chargesY: iy === null || oth === null ? null : iy + oth,
+        basicX: n(r.basic_charge_x), basicY: n(r.basic_charge_y), fmcX: n(r.fmc_x), fmcY: n(r.fmc_y), sa: n(r.sum_assured),
         tivX: n(r.value_x), tivY: n(r.value_y)};
     }).filter(r => r.year !== null).sort((a, b) => a.year - b.year);
     const rx = n(j.rate_x_percent), ry = n(j.rate_y_percent);
@@ -100,6 +122,7 @@ Rules: copy numbers exactly as printed, without commas. insurance_charges_total 
       premium: n(j.annual_premium), termYears: Math.max(n(j.premium_term_years) || 0, rows.length ? rows[rows.length - 1].year : 0),
       rates: {x: rx === null ? null : rx / 100, y: ry === null ? null : ry / 100},
       sustain: {x: n(j.sustain_age_x), y: n(j.sustain_age_y), best: n(j.sustain_age_best_estimate)},
+      bonus: j.bonus && n(j.bonus.amount) && n(j.bonus.first_age_next_birthday) ? {name: String(j.bonus.name || 'Bonus'), amount: n(j.bonus.amount), age: n(j.bonus.first_age_next_birthday), every: n(j.bonus.every_years)} : null,
       rows, unclear: Array.isArray(j.unclear) ? j.unclear.map(String) : []
     };
   }
