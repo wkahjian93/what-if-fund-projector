@@ -19,6 +19,12 @@
 
 Quotations are kept on this phone only (figures, no client name). Delete one with the bin icon; the app asks first.
 
+## GE rate tables (optional, private)
+
+Load the GE ILP knowledge file (`ge_ilp_knowledge.json`, GE internal agency material) on the home screen under **GE rate tables**. It stays on that phone only; it is not part of the app or this repository. With it, every year the quotation does not print uses GE's own rates for that plan, age, gender, smoker status and riders, scaled to the quotation's printed charges. The review screen shows the plan code and riders it found, with a ✓ for each one in the tables.
+
+Checked on the two sample quotations: the tables reproduce every printed charge within 0.06% (SmartProtect You) and 0.42% (Smart Revive Max), and GE's run-out ages come out exactly with no tuning. Waiver riders (e.g. IL PWE) are charged on the value of the premiums still to be waived (about 15× one year's premium at age 26), not on one year's premium.
+
 ## How it calculates
 
 - It uses each year's allocated premium and charges from the quotation, deducted monthly.
@@ -45,8 +51,10 @@ Quotations are kept on this phone only (figures, no client name). Delete one wit
 | At 6% | lasts to 83–84 | lasts to 76 |
 | At 8% | lasts to **91–97** | lasts to 90 (full term) |
 | Return needed to last the full term | **8.2–9.5%** (to 100) | **7.7%** (to 90) |
+| **With GE rate tables:** at 8% | **lasts to 100** | 90 (full term) |
+| **With GE rate tables:** needed for full term | **7.5%** | **7.8%** |
 
-Run `node test/test.js` for the automated checks (28 checks). Run the preview `what-if-fund` on port 5195.
+Run `node test/test.js` for the automated checks (39 checks; the rate-table checks run only where `private/ge_ilp_knowledge.json` exists). Run the preview `what-if-fund` on port 5195.
 
 ## Files
 

@@ -26,6 +26,11 @@
   const all = () => quotes.concat(window.WIF_SAMPLES || []);
   const byId = id => all().find(q => q.id === id);
   let rate = load('wif.rate', 0.08);
+  /* GE rate tables: internal agency material, loaded by the agent onto this phone only (never part of the app) */
+  let KB = null; try { KB = JSON.parse(localStorage.getItem('wif.kb') || 'null'); } catch (e) { KB = null; }
+  const kbMeta = () => load('wif.kbMeta', null);
+  const kbOk = k => k && k.coi_tables && k.products && k.medical_riders && k.other_riders;
+  if (!kbOk(KB)) KB = null;
 
   const app = $('#app');
   const bar = (title, sub, back) => `<header class="bar">${back ? '<button class="ib" id="back" aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button>' : ''}
@@ -50,9 +55,20 @@
           <span>${esc(q.data.product)} · ${q.data.premium ? rm(q.data.premium) + ' a year · ' : ''}${esc(q.saved)}</span></button>
           ${q.sample ? '<span class="pill ok">Sample</span>' : `<button class="del" data-del="${esc(q.id)}" aria-label="Delete">${ICON.del}</button>`}</div>`).join('')}
       </section>
+      <section class="card" style="margin-top:6px"><h2>GE rate tables</h2>
+        ${KB ? `<p style="font-size:14px"><span class="pill ok">Loaded</span> ${Object.keys(KB.products).length} plans, rates to age 99${kbMeta() ? ' · added ' + esc(kbMeta().added) : ''}. Years the quotation does not print use GE's own rates.</p>
+          <div class="row" style="margin-top:10px"><button class="btn sm" id="kbLoad">Replace</button><button class="btn sm" id="kbDel">Remove</button></div>`
+        : `<p style="font-size:14px">Not loaded. Results after the last printed age are estimated. Load the GE ILP knowledge file (.json) from Kah Jian to use GE's own rates.</p>
+          <button class="btn sm" id="kbLoad" style="margin-top:10px">Load rate tables (.json)</button>`}
+      </section>
       <p class="disc">The PDF is read on this phone. Photos are read by AI through the REDEFINE team server (sign in with the team code). Client names and IC numbers are not needed or kept.</p>
     </main>`;
     $('#cam').onclick = () => $('#fCam').click();
+    $('#kbLoad').onclick = () => $('#fKb').click();
+    if ($('#kbDel')) $('#kbDel').onclick = async () => {
+      if (!(await confirmBox('Remove the GE rate tables?', 'They will be deleted from this phone. Results go back to estimates until you load them again.', 'Remove'))) return;
+      localStorage.removeItem('wif.kb'); localStorage.removeItem('wif.kbMeta'); KB = null; home(); toast('Rate tables removed');
+    };
     $('#up').onclick = () => $('#fUp').click();
     $$('[data-open]').forEach(b => b.onclick = () => openQuote(b.dataset.open));
     $$('[data-del]').forEach(b => b.onclick = async () => {
@@ -61,6 +77,15 @@
       quotes = quotes.filter(x => x.id !== q.id); saveQuotes(); home(); toast('Deleted');
     });
   }
+  $('#fKb').addEventListener('change', async e => {
+    const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
+    let k; try { k = JSON.parse(await f.text()); } catch (err) { return fail('That file is not a GE rate-table file (.json).'); }
+    if (!kbOk(k)) return fail('That file does not contain the GE rate tables (insurance rates, plans and riders).');
+    if (!(await confirmBox('Keep the GE rate tables on this phone?', 'They are GE internal agency material. They stay on this phone only and are never sent anywhere. Do not share the file with clients.', 'Keep on this phone'))) return;
+    try { localStorage.setItem('wif.kb', JSON.stringify(k)); save('wif.kbMeta', {added: new Date().toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'}), extracted: (k._meta || {}).extracted || null}); }
+    catch (err) { return fail('This phone has no room to store the tables. Free some browser storage and try again.'); }
+    KB = k; home(); toast('GE rate tables loaded');
+  });
   ['#fCam', '#fUp'].forEach(id => $(id).addEventListener('change', e => { const f = Array.from(e.target.files || []); e.target.value = ''; if (f.length) intake(f); }));
 
   /* ---------- reading ---------- */
@@ -205,6 +230,7 @@
     const d = JSON.parse(JSON.stringify(data));
     d.rows = (d.rows || []).map(r => { const o = Object.assign({}, r); if (o.chargesX === undefined && o.charges !== undefined) { o.chargesX = o.chargesY = o.charges; } delete o.charges; return o; });
     d.sustain = d.sustain || {}; d.rates = d.rates || {}; const bn = d.bonus || {};
+    d.policy = d.policy || {riders: []}; d.policy.riders = d.policy.riders || []; const pol = d.policy;
     const COLS = [['year', 'Yr'], ['age', 'Age'], ['alloc', 'Allocated'], ['chargesX', 'Charges X'], ['chargesY', 'Charges Y'], ['sa', 'Sum assured'], ['tivX', 'Value X'], ['tivY', 'Value Y']];
     const pv = v => v === null || v === undefined || isNaN(v) ? '' : v;
     app.innerHTML = bar('Check the figures', fromPdf ? 'READ FROM PDF ON THIS PHONE' : 'READ BY AI · PLEASE CHECK', true) + `<main class="wrap">
@@ -228,6 +254,19 @@
         </div>
         <p class="muted">Only if the quotation credits a booster or loyalty bonus into the investment value (age next birthday). Leave blank if none.</p>
       </section>
+      <section class="card"><h2>Plan details (for GE rate tables)</h2>
+        <div class="grid2" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="f"><label for="pCode">Plan code</label><input id="pCode" inputmode="numeric" value="${esc(pol.code || '')}" placeholder="e.g. 8004"></div>
+          <div class="f"><label for="pG">Gender</label><select id="pG" style="min-height:44px;border:1px solid var(--line);border-radius:10px;padding:0 8px;background:#fff"><option value="M"${pol.gender !== 'F' ? ' selected' : ''}>Male</option><option value="F"${pol.gender === 'F' ? ' selected' : ''}>Female</option></select></div>
+          <div class="f"><label for="pS">Smoker</label><select id="pS" style="min-height:44px;border:1px solid var(--line);border-radius:10px;padding:0 8px;background:#fff"><option value="N"${pol.smoker !== 'Y' ? ' selected' : ''}>No</option><option value="Y"${pol.smoker === 'Y' ? ' selected' : ''}>Yes</option></select></div>
+          <div class="f"><label for="pOcc">Occ. class</label><input id="pOcc" inputmode="numeric" value="${esc(pol.occ || '1')}"></div>
+          <div class="f" style="grid-column:span 2"><label for="pBsa">Basic sum assured (RM)</label><input id="pBsa" inputmode="decimal" value="${pv(pol.bsa)}"></div>
+        </div>
+        <div class="scroll"><table class="t edit"><thead><tr><th>Rider code</th><th>Sum assured</th><th>Years</th><th></th></tr></thead>
+          <tbody id="rid">${(pol.riders || []).map((r, i) => `<tr data-i="${i}"><td><input data-k="code" value="${esc(r.code || '')}" style="text-align:left" aria-label="Rider code"></td><td><input data-k="sa" inputmode="decimal" value="${pv(r.sa)}" aria-label="Rider sum assured"></td><td><input data-k="years" inputmode="numeric" value="${pv(r.years)}" aria-label="Rider years"></td><td><button data-rmr="${i}" aria-label="Remove rider">✕</button></td></tr>`).join('')}</tbody></table></div>
+        <button class="btn sm ghost" id="addRid">+ Add a rider</button>
+        <p class="muted" id="kbStat"></p>
+      </section>
       <section class="card"><h2>Yearly table (Table 1)</h2>
         <p class="muted" style="margin-bottom:8px">Charges X / Y = insurance charges (basic + riders) + other charges for each scenario, not the fund management charge. Most plans print one set, so X and Y are the same. Plans that pay the higher of sum assured or fund print them per scenario. Value X / Y = total investment value.</p>
         <div class="scroll"><table class="t edit"><thead><tr>${COLS.map(c => `<th>${c[1]}</th>`).join('')}<th></th></tr></thead>
@@ -244,6 +283,9 @@
       d.sustain = Object.assign({}, d.sustain, {x: n($('#sX').value), y: n($('#sY').value)});
       const ba = n($('#bAmt').value), bg = n($('#bAge').value);
       d.bonus = ba && bg ? {name: (d.bonus && d.bonus.name) || 'Booster', amount: ba, age: bg, every: n($('#bEv').value)} : null;
+      d.policy = Object.assign({}, d.policy, {code: $('#pCode').value.replace(/\D/g, '') || null, gender: $('#pG').value, smoker: $('#pS').value,
+        occ: $('#pOcc').value.replace(/\D/g, '') || '1', bsa: n($('#pBsa').value), premium: d.premium,
+        riders: $$('#rid tr').map(tr => { const o = {}; $$('input', tr).forEach(inp => o[inp.dataset.k] = inp.dataset.k === 'code' ? inp.value.trim().toUpperCase() : n(inp.value)); return o; }).filter(r => r.code)});
       d.rows = $$('#rows tr').map(tr => { const o = Object.assign({}, d.rows[+tr.dataset.i] || {}); $$('input', tr).forEach(inp => o[inp.dataset.k] = n(inp.value)); return o; });
       return d;
     };
@@ -254,15 +296,27 @@
         + ((c.warnings.length || notes.length) ? `<div class="checks"><b>Please check</b><ul>${c.warnings.concat(notes).map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>` : '')
         + (!c.problems.length && !c.warnings.length && !notes.length ? `<div class="checks" style="background:var(--okbg);border-color:#BFE3D7"><b style="color:var(--ok)">${d.rows.length} rows read.</b> Compare a few numbers with the quotation, then confirm.</div>` : '');
       $('#go').disabled = !!c.problems.length;
+      const st = $('#kbStat');
+      if (st) {
+        if (!KB) st.textContent = 'GE rate tables are not loaded on this phone, so years after the last printed age are estimated.';
+        else if (!d.policy.code || !KB.products[d.policy.code]) st.innerHTML = '<span style="color:var(--warn)">Plan code ' + esc(d.policy.code || '(blank)') + ' is not in the GE rate tables. Years after the last printed age will be estimated.</span>';
+        else {
+          const known = c => KB.other_riders.riders[c] || Object.values(KB.medical_riders.riders).some(r => (r.codes || []).includes(c));
+          const rs = d.policy.riders.map(r => esc(r.code) + (known(r.code) ? ' ✓' : ' (not in tables)')).join(', ');
+          st.innerHTML = '<span style="color:var(--ok)">GE rate tables: ' + esc(KB.products[d.policy.code].name) + ' ✓</span>' + (rs ? ' · Riders: ' + rs : '');
+        }
+      }
       return c;
     };
     app.oninput = () => show();
     $$('[data-rm]').forEach(b => b.onclick = () => { collect(); d.rows.splice(+b.dataset.rm, 1); review(d, notes, fromPdf, existingId); });
+    $$('[data-rmr]').forEach(b => b.onclick = () => { collect(); d.policy.riders.splice(+b.dataset.rmr, 1); review(d, notes, fromPdf, existingId); });
+    $('#addRid').onclick = () => { collect(); d.policy.riders.push({code: '', sa: null, years: null}); review(d, notes, fromPdf, existingId); };
     $('#addRow').onclick = () => { collect(); const last = d.rows[d.rows.length - 1] || {}; d.rows.push({year: last.year ? last.year + 1 : 1, age: last.age ? last.age + 1 : null}); review(d, notes, fromPdf, existingId); };
     $('#back').onclick = $('#cancel').onclick = home;
     $('#go').onclick = () => {
       const c = show(); if (c.problems.length) return;
-      const m = WIF.calibrate(d);
+      const m = WIF.calibrate(d, KB);
       if (!m.ok) return toast(m.problems[0]);
       const id = existingId && !byId(existingId).sample ? existingId : 'q' + Date.now();
       const label = `${d.product.replace(/\s*\(.*\)$/, '')}, age ${d.entryAge}`;
@@ -277,7 +331,7 @@
   /* ---------- result ---------- */
   function openQuote(id) {
     const rec = byId(id); if (!rec) return home();
-    const model = WIF.calibrate(rec.data);
+    const model = WIF.calibrate(rec.data, KB);
     if (!model.ok) return review(rec.data, [], rec.data.source === 'pdf', id);
     app.oninput = null;
     const d = rec.data, endAge = model.entryAge + model.termYears;
@@ -298,7 +352,7 @@
       <div id="out"></div>
       <section class="card"><h2>Fund value (cash value) by age</h2>
         <div class="scroll"><table class="t"><thead><tr><th>Age</th><th>${pct(model.rates.x)} (GE X)</th><th>${pct(model.rates.y)} (GE Y)</th><th class="u" id="thU"></th></tr></thead><tbody id="tbl"></tbody></table></div>
-        <p class="note" style="margin-top:8px"><span class="est">≈</span> = after the last age printed in the quotation (age ${model.entryAge + model.lastDataYear}); charges there are estimated.</p>
+        <p class="note" style="margin-top:8px"><span class="est">≈</span> = after the last age printed in the quotation (age ${model.entryAge + model.lastDataYear}); ${model.table ? 'charges there come from GE\'s rate tables' : 'charges there are estimated'}.</p>
       </section>
       <section class="card"><h2>Fund value over time</h2><div id="chart"></div>
         <div class="legend"><span><i style="background:var(--cx)"></i>${pct(model.rates.x)}</span><span><i style="background:var(--cy)"></i>${pct(model.rates.y)}</span><span><i style="background:var(--cu)"></i><b id="lgU"></b></span><span>● GE printed figures</span></div>
@@ -308,10 +362,16 @@
           <b>${acc.grade === 'good' ? 'Matches GE\'s own figures' : acc.grade === 'fair' ? 'Close to GE\'s figures' : 'Does not match GE\'s figures well, so check the readings'}</b>
           <p class="muted">Re-creating GE's ${pct(model.rates.x)} and ${pct(model.rates.y)} columns from the quotation's own charges, the app is within ${(acc.maxErr * 100).toFixed(acc.maxErr < 0.01 ? 2 : 1)}% at every printed year.
           ${['x', 'y'].map(k => acc.lapse[k].ge ? `At ${pct(model.rates[k])} GE says the policy lasts to age ${acc.lapse[k].ge}; the app gets ${acc.lapse[k].app}.` : '').join(' ')}</p></div></div>
+        ${model.table ? `<div class="acc" style="margin-top:10px"><span class="dot" style="background:${model.table.maxDev !== null && model.table.maxDev <= 0.05 ? 'var(--ok)' : 'var(--gold)'}"></span><div>
+          <b>GE rate tables used for ${esc(model.table.name)}</b>
+          <p class="muted">Years the quotation does not print use GE's own insurance and rider rates${model.table.maxDev !== null ? `. At the ${model.table.checked} printed years, the tables are within ${(model.table.maxDev * 100).toFixed(model.table.maxDev < 0.01 ? 2 : 1)}% of the quotation's charges` : ''}. Rates can be revised by GE; medical rider rates often are.</p>
+          ${model.table.notes.length ? `<p class="muted" style="color:var(--warn)">${model.table.notes.map(esc).join(' ')}</p>` : ''}</div></div>`
+        : (model.tableNotes && model.tableNotes.length ? `<p class="muted" style="color:var(--warn);margin-top:8px">${model.tableNotes.map(esc).join(' ')} Years after the last printed age are estimated.</p>`
+        : (!KB ? '<p class="muted" style="margin-top:8px">GE rate tables are not loaded on this phone, so years after the last printed age are estimated. Load them on the home screen for GE\'s own rates.</p>' : '<p class="muted" style="color:var(--warn);margin-top:8px">This quotation has no plan code, so GE\'s rate tables were not used. Tap "Check the figures" and fill in the plan details (or upload the PDF again).</p>'))}
         <details><summary>How it works</summary><ul class="note">
           <li>The app uses the quotation's allocated premium and charges for each year, deducted monthly, and fits the fund's tax (${pct1(model.costs.tax)}) and fund management charge (${(model.costs.fmc * 100).toFixed(2)}% a year) to GE's figures.</li>
-          <li>For years the quotation skips (for example 11–14), charges are filled in between the printed years and fine-tuned so GE's ${pct(model.rates.x)} and ${pct(model.rates.y)} values come out the same.</li>
-          <li>After age ${model.entryAge + model.lastDataYear} the quotation prints no charges. ${model.level ? `The insurance rate per RM at risk keeps rising ${pct1(model.growth.q - 1)} a year by age (${model.growth.qFromRef ? 'GE reference from two quotations' : 'this plan\'s printed pace, in line with the GE reference of about 8–9%'})${model.growth.fixed > 1.001 ? `; riders and fees rise ${pct1(model.growth.fixed - 1)} a year` : ''}.` : `Charges keep rising at their printed pace (${pct1(model.growth.fixed - 1)} a year).`}${model.growthTuned ? (Math.abs(model.growth.extra - 1) < 0.01 ? ' That pace alone gives the same run-out ages as the quotation\'s "policy may sustain" lines, so no adjustment is needed.' : ` To match the quotation's "policy may sustain" ages they need an extra ${pct1(model.growth.extra - 1)} a year.`) : ''}</li>
+          ${model.table ? `<li>For years the quotation skips or stops printing, charges come from GE's rate tables for this plan, age, gender, smoker status and riders, scaled to the quotation's own printed charges. Waiver riders are charged on the value of the premiums still to be waived.</li>` : `<li>For years the quotation skips (for example 11–14), charges are filled in between the printed years and fine-tuned so GE's ${pct(model.rates.x)} and ${pct(model.rates.y)} values come out the same.</li>`}
+          ${model.table ? '' : `<li>After age ${model.entryAge + model.lastDataYear} the quotation prints no charges. ${model.level ? `The insurance rate per RM at risk keeps rising ${pct1(model.growth.q - 1)} a year by age (${model.growth.qFromRef ? 'GE reference from two quotations' : 'this plan\'s printed pace, in line with the GE reference of about 8–9%'})${model.growth.fixed > 1.001 ? `; riders and fees rise ${pct1(model.growth.fixed - 1)} a year` : ''}.` : `Charges keep rising at their printed pace (${pct1(model.growth.fixed - 1)} a year).`}${model.growthTuned ? (Math.abs(model.growth.extra - 1) < 0.01 ? ' That pace alone gives the same run-out ages as the quotation\'s "policy may sustain" lines, so no adjustment is needed.' : ` To match the quotation's "policy may sustain" ages they need an extra ${pct1(model.growth.extra - 1)} a year.`) : ''}</li>`}
           ${model.growthTuned && model.growth.extra > 1.01 ? `<li>GE's figures pin charges down only to age ${model.anchorAge - 1}. After that the app keeps the faster pace (the careful answer). If charges go back to the printed pace, results are better; the range shows both.</li>` : ''}
           ${model.bonus ? `<li>${esc(model.bonus.name)} of ${rm(model.bonus.amount)} is added to the fund at age ${model.bonus.age}${model.bonus.every ? ` and every ${model.bonus.every} years after` : ''}, while the policy is in force.</li>` : ''}
           <li>Your return is the fund's return before tax and fund charge, the same basis as GE's ${pct(model.rates.x)} / ${pct(model.rates.y)}. It is steady every year; real returns go up and down, which usually makes things worse.</li>

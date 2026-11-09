@@ -230,5 +230,22 @@
    "tivX": 0,
    "tivY": 0
   }
- ]
+ ],
+ "policy": {
+  "code": "0562",
+  "gender": "M",
+  "smoker": "N",
+  "occ": "1",
+  "bsa": 500000,
+  "premium": 10000.2,
+  "premiumYears": 5,
+  "riders": [
+   {
+    "code": "U373",
+    "name": "LDR",
+    "years": 58,
+    "sa": null
+   }
+  ]
+ }
 }

@@ -3,8 +3,9 @@ const http = require('http'), fs = require('fs'), path = require('path');
 const root = path.join(__dirname, 'docs');
 const types = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.pdf': 'application/pdf'};
 http.createServer((req, res) => {
-  if (req.url.startsWith('/__samples/')) { // local test run only: lets the browser test load a quotation from samples/
-    const f = path.join(__dirname, 'samples', path.basename(decodeURIComponent(req.url.slice(11))));
+  if (req.url.startsWith('/__samples/') || req.url.startsWith('/__private/')) { // local test run only (127.0.0.1): quotations and the private rate tables
+    const dir = req.url.startsWith('/__private/') ? 'private' : 'samples';
+    const f = path.join(__dirname, dir, path.basename(decodeURIComponent(req.url.split('/').pop())));
     if (!fs.existsSync(f)) { res.writeHead(404); return res.end(); }
     res.writeHead(200, {'Content-Type': 'application/pdf'}); return fs.createReadStream(f).pipe(res);
   }

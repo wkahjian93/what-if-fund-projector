@@ -67,4 +67,33 @@ for (const [q, ref, name] of [[spy, m, 'SPY'], [srm, s, 'SRM']]) {
 const ai = toAI(spy); ai.rows[10].value_y = null; ai.unclear = ['year 15 value at 5% is blurred'];
 const d2 = P.fromAI(ai); ok(!W.calibrate(d2).ok && d2.unclear.length === 1, 'AI null is kept as missing and blocks the calculation');
 
+// 6. plan details read from the PDF (needed for GE's rate tables)
+ok(spy.policy && spy.policy.code === '8004' && spy.policy.bsa === 100000 && spy.policy.riders.map(r => r.code).join() === 'U807,U809,U875', 'SPY plan details: 8004, RM100k, riders U807 U809 U875');
+ok(srm.policy && srm.policy.code === '0562' && srm.policy.bsa === 500000 && srm.policy.premiumYears === 5, 'SRM plan details: 0562, RM500k, 5-year premium');
+
+// 7. GE rate tables (private knowledge pack; only on Kah Jian's PC, never in the public repo)
+let kb = null; try { kb = require('../private/ge_ilp_knowledge.json'); } catch (e) {}
+if (!kb) console.log('(GE rate-table checks skipped: private/ge_ilp_knowledge.json not on this machine)');
+else {
+  const KBM = require('../docs/kb.js');
+  const t = KBM.build(kb, Object.assign({entryAge: 26}, spy.policy), 74);
+  const printed = {1: [121, 45, 50, 936], 10: [121, 77, 71, 937], 20: [277, 272, 209, 1134], 30: [810, 704, 503, 2067], 40: [1935, 1603, 1219, 3437], 50: [4180, 2351, 1993, 7093]};
+  let worst = 0;
+  for (const [y, [b, ci, pw, sh]] of Object.entries(printed)) {
+    const p = t.parts[y - 1];
+    for (const [ge, app] of [[b, p.basic], [ci, p.riders.U807], [pw, p.riders.U809], [sh, p.riders.U875]]) worst = Math.max(worst, Math.abs(app - ge) / ge);
+  }
+  ok(worst < 0.015, 'GE tables give SPY\'s printed basic, CI, waiver and medical charges within 1.5% (worst ' + (worst * 100).toFixed(2) + '%)');
+  const mt = W.calibrate(spy, kb), st = W.calibrate(srm, kb);
+  ok(mt.table && mt.table.maxDev < 0.01, 'SPY: tables within 1% of every printed total charge');
+  ok(st.table && st.table.maxDev < 0.01, 'SRM: tables within 1% of every printed insurance rate');
+  ok(mt.accuracy.lapse.x.app === 72 && mt.accuracy.lapse.y.app === 80, 'SPY with tables, no tuning: run-out ages 72 / 80 match GE');
+  ok(st.accuracy.lapse.x.app === 61 && st.accuracy.lapse.y.app === 71, 'SRM with tables, no tuning: run-out ages 61 / 71 match GE');
+  ok(mt.accuracy.maxErr < 0.01 && st.accuracy.maxErr < 0.01, 'with tables, fund values within 1% of every GE printed value');
+  ok(W.project(mt, 0.08).fullTerm, 'SPY with tables: 8% lasts to 100');
+  const n = W.minReturn(mt); ok(n > 0.07 && n < 0.08, 'SPY with tables: about 7.5% needed to last to 100 (' + (n * 100).toFixed(2) + '%)');
+  const wrong = clone(spy); wrong.policy.code = '9999';
+  const mw = W.calibrate(wrong, kb); ok(mw.ok && !mw.table && mw.tableNotes.length, 'unknown plan code falls back to estimates with a note');
+}
+
 console.log(pass + ' passed, ' + fail + ' failed'); process.exit(fail ? 1 : 0);

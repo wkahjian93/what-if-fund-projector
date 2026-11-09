@@ -251,5 +251,34 @@
    "tivX": 0,
    "tivY": 0
   }
- ]
+ ],
+ "policy": {
+  "code": "8004",
+  "gender": "M",
+  "smoker": "N",
+  "occ": "1",
+  "bsa": 100000,
+  "premium": 4000.2,
+  "premiumYears": 74,
+  "riders": [
+   {
+    "code": "U807",
+    "name": "IL CIBR",
+    "years": 73,
+    "sa": 100000
+   },
+   {
+    "code": "U809",
+    "name": "IL PWE",
+    "years": 73,
+    "sa": 4000
+   },
+   {
+    "code": "U875",
+    "name": "SHP2-0.5-3M",
+    "years": 74,
+    "sa": 200
+   }
+  ]
+ }
 }

@@ -74,6 +74,20 @@
       if (/best estimate/i.test(what)) sus.best = +m[2]; else if (/Y%/.test(what)) sus.y = +m[2]; else if (/X%/.test(what)) sus.x = +m[2];
     }
     if (sus.x === undefined && sus.y === undefined) notes.push('The "policy may sustain" lines were not found, so run-out ages after the printed years are estimated without them.');
+    /* plan details for GE's rate tables: plan code, life assured, basic sum assured, riders */
+    const lines2 = all.slice(0, tIdx).join('\n').split('\n');
+    const code = (pLine.match(/(?:Product Name)[^\d]*?(\d{4})\s/) || [])[1] || null;
+    const gender = (front.match(/Gender[\s|=:]*(Male|Female)/) || [])[1];
+    const smoker = (front.match(/Smoker[\s|=:]*(Yes|No)/) || [])[1];
+    const occ = (front.match(/Occupation Class[\s|=:]*(\d)/) || [])[1];
+    const ipLine = lines2.find(l => /^Insurance Premium\s*\|/.test(l));
+    const ipNums = ipLine ? numTokens(ipLine.replace(/^Insurance Premium\s*\|/, '')) : null;
+    const riders = [], seen = {};
+    for (const l of lines2) {
+      const m = l.match(/^(U\d{2,4})\s+([^|]+?)\s*\|\s*(\d+)\s*\|[\s|=]*([\d,]+|Not applicable|Tidak berkenaan)/);
+      if (!m || seen[m[1]]) continue; seen[m[1]] = 1;
+      riders.push({code: m[1], name: m[2].replace(/=/g, ' ').trim(), years: +m[3], sa: /\d/.test(m[4]) ? toNum(m[4]) : null});
+    }
     const prem = pick(/Total\^?[^\n]*?RM[\s|=]*([\d,]+\.\d\d)/);
     const term = pick(/Premium Payment Term[\s|=:]*(\d+)/);
     const ageNB = pick(/Age Next Birthday[\s|=:]*(\d+)/);
@@ -83,7 +97,9 @@
       source: 'pdf', product: product || 'Investment-linked plan', fund: funds ? funds.trim() : null,
       entryAge: ageNB ? +ageNB : rows[0].age - rows[0].year, premium: prem ? toNum(prem) : rows[0].premium, mode: mode || null,
       termYears: Math.max(term ? +term : 0, rows[rows.length - 1].year),
-      rates: {x: rx ? +rx[1] / 100 : null, y: ry ? +ry[1] / 100 : null}, sustain: sus, bonus, rows
+      rates: {x: rx ? +rx[1] / 100 : null, y: ry ? +ry[1] / 100 : null}, sustain: sus, bonus, rows,
+      policy: {code, gender: gender ? gender[0] : null, smoker: smoker ? smoker[0] : null, occ: occ || null,
+        bsa: ipNums && ipNums.length >= 2 ? ipNums[1] : null, premium: prem ? toNum(prem) : null, premiumYears: term ? +term : null, riders}
     };
     if (!rx || !ry) notes.push('The two illustrated returns were not found. Please type them in.');
     return {ok: true, data, notes, page: tIdx + 1};
@@ -93,8 +109,10 @@
   const aiPrompt = () => `You are reading photos of a Malaysian investment-linked life insurance quotation (benefit illustration), usually Great Eastern.
 Find the main yearly table ("Table 1") that shows, for each policy year: premium paid, allocated premium, insurance charges (basic plan and unit-deducting riders; some plans print them separately for Scenario X and Scenario Y), other charges, fund management charge for Scenario X and Y, sum assured, and the non-guaranteed total investment value for Scenario X and Scenario Y.
 Also look for: the product name, the life assured's age next birthday, the annualised premium, premium payment term, the two illustrated returns (e.g. 2% Scenario X, 5% Scenario Y), the lines "the policy may sustain for N years up to your age A ... under projected investment returns of X% / Y% / best estimate", and any booster / loyalty bonus credited into the investment value (amount, the age next birthday it is first credited, and "every N years thereafter" if stated).
+Also read the plan details on the first pages: the 4-digit product code before the product name, gender, smoker, occupation class, the basic plan's sum assured, and each unit-deducting rider line (code like U807, name, coverage years, sum assured as printed).
 Return ONLY JSON:
-{"product": string|null, "entry_age_next_birthday": number|null, "annual_premium": number|null, "premium_term_years": number|null,
+{"product": string|null, "product_code": string|null, "gender": "Male"|"Female"|null, "smoker": "Yes"|"No"|null, "occupation_class": number|null, "basic_sum_assured": number|null,
+ "riders": [{"code": string, "name": string, "years": number|null, "sum_assured": number|null}], "entry_age_next_birthday": number|null, "annual_premium": number|null, "premium_term_years": number|null,
  "rate_x_percent": number|null, "rate_y_percent": number|null,
  "sustain_age_x": number|null, "sustain_age_y": number|null, "sustain_age_best_estimate": number|null,
  "bonus": {"name": string, "amount": number, "first_age_next_birthday": number, "every_years": number|null} | null,
@@ -123,7 +141,11 @@ Rules: copy numbers exactly as printed, without commas. insurance_charges_x / _y
       rates: {x: rx === null ? null : rx / 100, y: ry === null ? null : ry / 100},
       sustain: {x: n(j.sustain_age_x), y: n(j.sustain_age_y), best: n(j.sustain_age_best_estimate)},
       bonus: j.bonus && n(j.bonus.amount) && n(j.bonus.first_age_next_birthday) ? {name: String(j.bonus.name || 'Bonus'), amount: n(j.bonus.amount), age: n(j.bonus.first_age_next_birthday), every: n(j.bonus.every_years)} : null,
-      rows, unclear: Array.isArray(j.unclear) ? j.unclear.map(String) : []
+      rows, unclear: Array.isArray(j.unclear) ? j.unclear.map(String) : [],
+      policy: {code: j.product_code ? String(j.product_code).replace(/D/g, '').slice(0, 4) || null : null, gender: j.gender ? String(j.gender)[0].toUpperCase() : null,
+        smoker: j.smoker ? String(j.smoker)[0].toUpperCase() : null, occ: n(j.occupation_class) ? String(n(j.occupation_class)) : null,
+        bsa: n(j.basic_sum_assured), premium: n(j.annual_premium), premiumYears: n(j.premium_term_years),
+        riders: Array.isArray(j.riders) ? j.riders.filter(r => r && r.code).map(r => ({code: String(r.code).toUpperCase().trim(), name: String(r.name || ''), years: n(r.years), sa: n(r.sum_assured)})) : []}
     };
   }
 

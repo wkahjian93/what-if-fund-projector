@@ -137,7 +137,7 @@
     return {years, lapseYear: null};
   }
 
-  function calibrate(q) {
+  function calibrate(q, kb) {
     const chk = check(q);
     if (chk.problems.length) return {ok: false, problems: chk.problems, warnings: chk.warnings};
     const rates = {x: +q.rates.x, y: +q.rates.y};
@@ -145,10 +145,19 @@
     const lastPrinted = rows[rows.length - 1];
     const live = r => r.tivX > 0 || r.tivY > 0 || r.chargesX > 0 || r.chargesY > 0;
     rows = rows.slice(0, rows.length - rows.slice().reverse().findIndex(live));
-    const level = chk.level;
-    const costs = rowCosts(rows, level);
     const entryAge = num(q.entryAge) !== null ? +q.entryAge : (rows[0].age - rows[0].year);
     const termYears = Math.max(num(q.termYears) || 0, lastPrinted.year);
+    /* GE rate tables (private knowledge pack), when loaded and the plan is recognised */
+    let tab = null, tabNotes = [];
+    const KBM = root.WIFKB || (typeof require === 'function' ? (() => { try { return require('./kb.js'); } catch (e) { return null; } })() : null);
+    if (kb && q.policy && q.policy.code && KBM) {
+      const t = KBM.build(kb, Object.assign({}, q.policy, {entryAge, premium: num(q.policy.premium) || num(q.premium)}), termYears);
+      if (t.ok) tab = t; tabNotes = t.notes || [];
+    }
+    const level = tab ? tab.netSA : chk.level;
+    const bsa = tab && tab.years[0].sa ? tab.years[0].sa : null;
+    const costRows = bsa && level ? rows.map(r => Object.assign({}, r, {sa: bsa})) : rows;
+    const costs = rowCosts(costRows, level);
     /* bonus / booster credited into the fund at the policy anniversary of the stated age (age next birthday) */
     const b = q.bonus && num(q.bonus.amount) > 0 && num(q.bonus.age) > 0 ? q.bonus : null;
     const bonusAt = y => { if (!b) return 0; const age = entryAge + y, k = age - b.age; return k === 0 || (k > 0 && num(b.every) > 0 && k % b.every === 0) ? +b.amount : 0; };
@@ -158,12 +167,12 @@
     const plan = {};
     const put = (y, alloc, fixed, qq, sa, src) => plan[y] = {alloc, fixed, q: qq, sa: sa || 0, src, bonus: bonusAt(y)};
     if (rows[0].year > 1) for (let y = 1; y < rows[0].year; y++) put(y, rows[0].alloc, costs[0].fixed, costs[0].q, rows[0].sa, 'between');
-    rows.forEach((r, i) => put(r.year, r.alloc, costs[i].fixed, costs[i].q, r.sa, 'quote'));
+    rows.forEach((r, i) => put(r.year, r.alloc, costs[i].fixed, costs[i].q, bsa || r.sa, 'quote'));
     const geo = (a, b, t) => a > 0 && b > 0 ? a * Math.pow(b / a, t) : a + (b - a) * t;
 
     /* years the quotation skips: fill between printed years, then scale so GE's own X / Y values come out right */
     const scales = [];
-    for (let i = 1; i < rows.length; i++) {
+    if (!tab) for (let i = 1; i < rows.length; i++) {
       const a = rows[i - 1], b = rows[i], ca = costs[i - 1], cb = costs[i];
       if (b.year - a.year < 2) continue;
       const ys = []; for (let y = a.year + 1; y < b.year; y++) ys.push(y);
@@ -216,7 +225,7 @@
       if (years > last.year && years < termYears) targets.push({k, r, years});
     }
     let e = 1, anchorYear = last.year;
-    if (targets.length) {
+    if (targets.length && !tab) {
       const lapseYear = (ee, r) => { fillAfter(plan, ee, termYears, ee); return runPlan(plan, termYears, r, p).lapseYear || termYears + 1; };
       const es = targets.map(t => {
         let lo = 0.85, hi = 1.4;
@@ -231,12 +240,46 @@
     /* main plan: the tuned pace continues (careful view). Other view: after the last age GE's figures pin down,
        charges go back to the printed pace. */
     fillAfter(plan, e, termYears, e);
-    const planTrend = Object.assign({}, plan);
+    let planTrend = Object.assign({}, plan);
     fillAfter(planTrend, e, anchorYear, Math.min(1, e));
 
+    /* With the GE tables: every year the quotation does not print comes from the tables, scaled by how the tables
+       compare with the quotation's own charges at the nearest printed years (so the quotation always wins). */
+    let table = null;
+    if (tab) {
+      const rf = [], rq = [];
+      rows.forEach((r, i) => {
+        const t = tab.years[r.year - 1]; if (!t) return;
+        if (t.fixed > 0 && costs[i].fixed > 0) rf.push([r.year, costs[i].fixed / t.fixed]);
+        if (t.q > 0 && costs[i].q > 0 && !costs[i].rough) rq.push([r.year, costs[i].q / t.q]);
+      });
+      const interp = (list, y) => {
+        if (!list.length) return 1;
+        if (y <= list[0][0]) return list[0][1];
+        if (y >= list[list.length - 1][0]) return list[list.length - 1][1];
+        for (let i = 1; i < list.length; i++) if (y <= list[i][0]) { const [y0, a] = list[i - 1], [y1, c] = list[i]; return a + (c - a) * (y - y0) / (y1 - y0); }
+        return 1;
+      };
+      const allocAt = y => {
+        if (y > last.year) return premiumEnds ? 0 : allocAfter.alloc;
+        let a = null, c = null; for (const r of rows) { if (r.year < y) a = r; else if (r.year > y && !c) c = r; }
+        return a && c ? Math.min(a.alloc, c.alloc) : (a || c).alloc;
+      };
+      for (let y = 1; y <= termYears; y++) {
+        if (plan[y] && plan[y].src === 'quote') continue;
+        const t = tab.years[y - 1];
+        plan[y] = {alloc: allocAt(y), fixed: t.fixed * interp(rf, y), q: t.q * interp(rq, y), sa: t.sa, src: y > last.year ? 'after' : 'between', bonus: bonusAt(y)};
+      }
+      planTrend = plan;
+      const dev = rf.concat(rq).map(([, r]) => Math.abs(r - 1));
+      table = {name: tab.name, maxDev: dev.length ? Math.max(...dev) : null, checked: dev.length, notes: tabNotes.slice(), unknown: tab.unknown,
+        lastRatio: rf.length ? rf[rf.length - 1][1] : 1};
+      if (table.maxDev !== null && table.maxDev > 0.1) table.notes.push('The quotation charges differ from the GE tables by up to ' + Math.round(table.maxDev * 100) + '% (a loading, a different occupation class or revised rates?). The tables are scaled to the quotation figures.');
+    }
+
     const model = {ok: true, q, rates, entryAge, termYears, plan, planTrend, level, costs: fit, p, scales,
-      growth: {fixed: gF, q: gQ, qFromRef: gQ === REF_Q_GROWTH && cl.q > 0, extra: e, total: null}, growthTuned: !!targets.length,
-      anchorAge: entryAge + anchorYear, bonus: b, lastDataYear: last.year, rows: chk.rows, warnings: chk.warnings, sustain: sus, premiumEnds};
+      growth: {fixed: gF, q: gQ, qFromRef: gQ === REF_Q_GROWTH && cl.q > 0, extra: e, total: null}, growthTuned: !!targets.length && !tab,
+      anchorAge: entryAge + anchorYear, bonus: b, table, tableNotes: tab ? [] : tabNotes, lastDataYear: last.year, rows: chk.rows, warnings: chk.warnings, sustain: sus, premiumEnds};
     const mid = plan[Math.min(termYears, last.year + 5)];
     model.growth.total = last.year < termYears && mid ? Math.pow((mid.fixed + mid.q * lastSA * 0.9) / Math.max(1, cl.fixed + cl.q * lastSA * 0.9), 1 / Math.min(5, termYears - last.year)) : 1;
     model.accuracy = accuracy(model);
