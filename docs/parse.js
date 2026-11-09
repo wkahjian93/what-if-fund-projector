@@ -107,6 +107,7 @@
 
   /* ---------- AI photo reading ---------- */
   const aiPrompt = () => `You are reading photos of a Malaysian investment-linked life insurance quotation (benefit illustration), usually Great Eastern.
+The photos may be different pages of the same quotation (plan page, riders, yearly table, notes). A photo may show only some of the items below: return null (or an empty list) for anything not shown in these photos, and never guess it.
 Find the main yearly table ("Table 1") that shows, for each policy year: premium paid, allocated premium, insurance charges (basic plan and unit-deducting riders; some plans print them separately for Scenario X and Scenario Y), other charges, fund management charge for Scenario X and Y, sum assured, and the non-guaranteed total investment value for Scenario X and Scenario Y.
 Also look for: the product name, the life assured's age next birthday, the annualised premium, premium payment term, the two illustrated returns (e.g. 2% Scenario X, 5% Scenario Y), the lines "the policy may sustain for N years up to your age A ... under projected investment returns of X% / Y% / best estimate", and any booster / loyalty bonus credited into the investment value (amount, the age next birthday it is first credited, and "every N years thereafter" if stated).
 Also read the plan details on the first pages: the 4-digit product code before the product name, gender, smoker, occupation class, the basic plan's sum assured, and each unit-deducting rider line (code like U807, name, coverage years, sum assured as printed).
@@ -149,6 +150,45 @@ Rules: copy numbers exactly as printed, without commas. insurance_charges_x / _y
     };
   }
 
-  const api = {fromPdfText, linesOf, aiPrompt, fromAI};
+  /* Several AI answers for different photos of the same quotation -> one. Missing items are filled from the other
+     answers; where two answers disagree the first is kept and the difference is listed for the agent to check. */
+  function mergeAI(list) {
+    list = (list || []).filter(Boolean);
+    if (!list.length) return {rows: [], unclear: [], rates: {}, sustain: {}, policy: {riders: []}};
+    const out = JSON.parse(JSON.stringify(list[0]));
+    out.rates = out.rates || {}; out.sustain = out.sustain || {}; out.policy = out.policy || {riders: []}; out.policy.riders = out.policy.riders || [];
+    out.unclear = out.unclear || [];
+    const blank = v => v === null || v === undefined || v === '';
+    const fill = (o, src, keys) => keys.forEach(k => { if (blank(o[k]) && !blank(src[k])) o[k] = src[k]; });
+    for (const d of list.slice(1)) {
+      if ((!out.product || out.product === 'Investment-linked plan') && d.product && d.product !== 'Investment-linked plan') out.product = d.product;
+      fill(out, d, ['entryAge', 'premium', 'bonus']);
+      out.termYears = Math.max(out.termYears || 0, d.termYears || 0);
+      fill(out.rates, d.rates || {}, ['x', 'y']);
+      fill(out.sustain, d.sustain || {}, ['x', 'y', 'best']);
+      const p = d.policy || {};
+      fill(out.policy, p, ['code', 'gender', 'smoker', 'occ', 'bsa', 'premium', 'premiumYears']);
+      for (const r of p.riders || []) {
+        const have = out.policy.riders.find(x => x.code === r.code);
+        if (!have) out.policy.riders.push(r); else fill(have, r, ['name', 'years', 'sa']);
+      }
+      for (const r of d.rows || []) {
+        const have = out.rows.find(x => x.year === r.year);
+        if (!have) { out.rows.push(r); continue; }
+        for (const k of Object.keys(r)) {
+          if (blank(have[k])) have[k] = r[k];
+          else if (!blank(r[k]) && typeof r[k] === 'number' && Math.abs(r[k] - have[k]) > Math.max(1, Math.abs(have[k]) * 0.005))
+            out.unclear.push('two photos disagree on year ' + r.year + ' ' + k + ' (' + have[k] + ' vs ' + r[k] + ')');
+        }
+      }
+      out.unclear = out.unclear.concat(d.unclear || []);
+    }
+    out.rows.sort((a, b) => a.year - b.year);
+    if (out.entryAge === null || out.entryAge === undefined) { const r = out.rows.find(x => x.age !== null && x.age !== undefined); if (r) out.entryAge = r.age - r.year; }
+    out.termYears = Math.max(out.termYears || 0, out.rows.length ? out.rows[out.rows.length - 1].year : 0);
+    return out;
+  }
+
+  const api = {fromPdfText, linesOf, aiPrompt, fromAI, mergeAI};
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.WIFParse = api;
 })(typeof self !== 'undefined' ? self : this);

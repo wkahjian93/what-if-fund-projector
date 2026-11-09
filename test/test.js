@@ -67,6 +67,25 @@ for (const [q, ref, name] of [[spy, m, 'SPY'], [srm, s, 'SRM']]) {
 const ai = toAI(spy); ai.rows[10].value_y = null; ai.unclear = ['year 15 value at 5% is blurred'];
 const d2 = P.fromAI(ai); ok(!W.calibrate(d2).ok && d2.unclear.length === 1, 'AI null is kept as missing and blocks the calculation');
 
+// 5b. several photos of one quotation, read in two batches, then merged
+{
+  const full = toAI(spy);
+  full.product_code = '8004'; full.gender = 'Male'; full.smoker = 'No'; full.occupation_class = 1; full.basic_sum_assured = 100000;
+  full.riders = spy.policy.riders.map(r => ({code: r.code, name: r.name, years: r.years, sum_assured: r.sa}));
+  const planPage = Object.assign({}, full, {rows: [], rate_x_percent: null, rate_y_percent: null, sustain_age_x: null, sustain_age_y: null});
+  const tableA = {rate_x_percent: 2, rate_y_percent: 5, rows: full.rows.slice(0, 9), riders: [], unclear: []};
+  const tableB = {sustain_age_x: 72, sustain_age_y: 80, rows: full.rows.slice(9), riders: [], unclear: []};
+  const merged = P.mergeAI([P.fromAI(planPage), P.fromAI(tableA), P.fromAI(tableB)]);
+  const one = P.fromAI(full);
+  ok(merged.rows.length === one.rows.length && merged.policy.code === '8004' && merged.policy.riders.length === 3 && merged.sustain.y === 80 && merged.rates.x === 0.02,
+    'photos read in parts merge into one complete quotation');
+  const mm = W.calibrate(merged), m1 = W.calibrate(one);
+  ok(mm.ok && Math.abs(mm.accuracy.maxErr - m1.accuracy.maxErr) < 1e-9, 'merged photos give the same result as one complete reading');
+  const clash = P.fromAI(Object.assign({}, tableA, {rows: tableA.rows.map((r, i) => i === 2 ? Object.assign({}, r, {value_y: r.value_y + 500}) : r)}));
+  const mc = P.mergeAI([P.fromAI(tableA), clash]);
+  ok(mc.unclear.some(u => /year 3/.test(u) && /tivY/.test(u)), 'photos that disagree on a number are flagged for the agent');
+}
+
 // 6. plan details read from the PDF (needed for GE's rate tables)
 ok(spy.policy && spy.policy.code === '8004' && spy.policy.bsa === 100000 && spy.policy.riders.map(r => r.code).join() === 'U807,U809,U875', 'SPY plan details: 8004, RM100k, riders U807 U809 U875');
 ok(srm.policy && srm.policy.code === '0562' && srm.policy.bsa === 500000 && srm.policy.premiumYears === 5, 'SRM plan details: 0562, RM500k, 5-year premium');
@@ -94,6 +113,24 @@ else {
   const n = W.minReturn(mt); ok(n > 0.07 && n < 0.08, 'SPY with tables: about 7.5% needed to last to 100 (' + (n * 100).toFixed(2) + '%)');
   const wrong = clone(spy); wrong.policy.code = '9999';
   const mw = W.calibrate(wrong, kb); ok(mw.ok && !mw.table && mw.tableNotes.length, 'unknown plan code falls back to estimates with a note');
+}
+
+// 8. team server (the real Code.gs, run in memory with fake codes): tables only for signed-in agents, only the owner uploads
+let S = null; try { S = require('./server-sim.js'); } catch (e) {}
+if (!S) console.log('(team server checks skipped: REDEFINE Form Filler/server/Code.gs not next to this project)');
+else {
+  const T = {code: 'test-team-code', name: 'A'}, O = {code: 'test-owner-code', name: 'K'};
+  const text = kb ? JSON.stringify(kb) : JSON.stringify({coi_tables: {}, products: {}, medical_riders: {}, other_riders: {}, pad: 'x'.repeat(2000)});
+  ok(S.call(Object.assign({op: 'kbget'}, T)).error === 'no_kb', 'server: nothing to share before the owner uploads');
+  ok(S.call(Object.assign({op: 'kbput', text}, T)).error === 'not_allowed', 'server: the team code cannot upload tables');
+  ok(S.call({op: 'kbget', code: 'wrong'}).error === 'unauthorized', 'server: a wrong code gets nothing');
+  ok(S.call(Object.assign({op: 'kbput', text: '{"a":1}' + ' '.repeat(2000)}, O)).error === 'invalid_request', 'server: a file without rate tables is refused');
+  const up = S.call(Object.assign({op: 'kbput', text}, O));
+  ok(up.ok && up.ver, 'server: the owner code uploads the tables');
+  const g = S.call(Object.assign({op: 'kbget'}, T));
+  ok(g.text === text && g.ver === up.ver, 'server: an agent downloads exactly what the owner uploaded');
+  ok(S.call(Object.assign({op: 'kbget', have: g.ver}, T)).same === true, 'server: a phone that already has this version skips the download');
+  ok(S.call(Object.assign({op: 'login'}, T)).ok, 'server: existing sign-in still works');
 }
 
 console.log(pass + ' passed, ' + fail + ' failed'); process.exit(fail ? 1 : 0);

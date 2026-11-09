@@ -7,7 +7,7 @@
 ## How to use it (phone)
 
 1. Open the app and tap **Upload PDF or photos** and choose the MPOS PDF. It is read on the phone, with no internet or AI cost.
-   - If you only have paper, tap **Take photo** and snap **Table 1** (the yearly table with Scenario X / Scenario Y). Add page 2 ("the policy may sustain for … up to your age …") if you can. The first time, sign in with your name and the Form Filler team code.
+   - If you only have paper, tap **Take photo**. A tray opens: snap the plan page (plan, age, sum assured, riders, payment term), the "policy may sustain" lines and the yearly table (Table 1; two photos if needed), up to 10 photos, then **Read with AI**. The first time, sign in with your name and the team code.
 2. **Check the figures.** Compare two or three numbers with the quotation. Anything missing or unclear is shown in orange, and **Calculate** stays locked until it is fixed. The app never guesses a missing number.
 3. Tap **Calculate**, then pick a return: tap 6% / 8% / 10%, use + and −, or type any number such as 6.5.
 4. Read the result:
@@ -19,9 +19,11 @@
 
 Quotations are kept on this phone only (figures, no client name). Delete one with the bin icon; the app asks first.
 
-## GE rate tables (optional, private)
+## GE rate tables (from the team server)
 
-Load the GE ILP knowledge file (`ge_ilp_knowledge.json`, GE internal agency material) on the home screen under **GE rate tables**. It stays on that phone only; it is not part of the app or this repository. With it, every year the quotation does not print uses GE's own rates for that plan, age, gender, smoker status and riders, scaled to the quotation's printed charges. The review screen shows the plan code and riders it found, with a ✓ for each one in the tables.
+Agents tap **Sign in** under **GE rate tables** on the home screen with the team code. The app downloads GE's rate tables (GE internal agency material) from the REDEFINE team server and keeps them on the phone, then checks for a newer version each time it opens. The tables are one file (`ge_ilp_knowledge.json`) in the team's private Google Drive folder; only the team code can read it and only the owner code can replace it (home screen → "Owner: upload new tables to the team server"). They are never part of this repository.
+
+With them, every year the quotation does not print uses GE's own rates for that plan, age, gender, smoker status and riders, scaled to the quotation's printed charges. The review screen shows the plan code and riders it found, with a ✓ for each one in the tables.
 
 Checked on the two sample quotations: the tables reproduce every printed charge within 0.06% (SmartProtect You) and 0.42% (Smart Revive Max), and GE's run-out ages come out exactly with no tuning. Waiver riders (e.g. IL PWE) are charged on the value of the premiums still to be waived (about 15× one year's premium at age 26), not on one year's premium.
 
@@ -54,7 +56,7 @@ Checked on the two sample quotations: the tables reproduce every printed charge 
 | **With GE rate tables:** at 8% | **lasts to 100** | 90 (full term) |
 | **With GE rate tables:** needed for full term | **7.5%** | **7.8%** |
 
-Run `node test/test.js` for the automated checks (39 checks; the rate-table checks run only where `private/ge_ilp_knowledge.json` exists). Run the preview `what-if-fund` on port 5195.
+Run `node test/test.js` for the automated checks (50 checks; the rate-table checks run only where `private/ge_ilp_knowledge.json` exists; `test/server-sim.js` runs the real team server code in memory). Run the preview `what-if-fund` on port 5195.
 
 ## Files
 

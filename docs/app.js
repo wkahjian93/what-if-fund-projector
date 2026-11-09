@@ -47,7 +47,7 @@
     app.innerHTML = bar('What-If Fund Projector', 'REDEFINE · INVESTMENT-LINKED') + `<main class="wrap">
       <section class="card hero"><h2>Beyond 2% and 5%</h2>
         <div class="big">What if the fund earns 8%?</div>
-        <p>Snap the quotation's yearly table, or upload the MPOS PDF. See the fund value and how long the policy lasts at any return.</p>
+        <p>Snap the quotation pages (plan, riders, yearly table) or upload the MPOS PDF. See the fund value and how long the policy lasts at any return.</p>
         <div class="big2"><button class="btn primary" id="cam">${ICON.cam}Take photo</button><button class="btn" id="up">${ICON.up}Upload PDF or photos</button></div>
       </section>
       <section><h2 class="muted" style="margin:6px 4px 8px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;font-size:12px">Quotations on this phone</h2>
@@ -56,19 +56,18 @@
           ${q.sample ? '<span class="pill ok">Sample</span>' : `<button class="del" data-del="${esc(q.id)}" aria-label="Delete">${ICON.del}</button>`}</div>`).join('')}
       </section>
       <section class="card" style="margin-top:6px"><h2>GE rate tables</h2>
-        ${KB ? `<p style="font-size:14px"><span class="pill ok">Loaded</span> ${Object.keys(KB.products).length} plans, rates to age 99${kbMeta() ? ' · added ' + esc(kbMeta().added) : ''}. Years the quotation does not print use GE's own rates.</p>
-          <div class="row" style="margin-top:10px"><button class="btn sm" id="kbLoad">Replace</button><button class="btn sm" id="kbDel">Remove</button></div>`
-        : `<p style="font-size:14px">Not loaded. Results after the last printed age are estimated. Load the GE ILP knowledge file (.json) from Kah Jian to use GE's own rates.</p>
-          <button class="btn sm" id="kbLoad" style="margin-top:10px">Load rate tables (.json)</button>`}
+        ${KB ? `<p style="font-size:14px"><span class="pill ok">Ready</span> GE's own rates for ${Object.keys(KB.products).length} plans${kbMeta() && kbMeta().added ? ', updated ' + esc(kbMeta().added) : ''}. Years the quotation does not print use them.</p>`
+          : session() ? `<p style="font-size:14px" id="kbMsg">${esc(kbStatusText())}</p>`
+          : `<p style="font-size:14px">Sign in with the team code to get GE's own rates. Without them, results after the last printed age are estimated.</p>
+             <button class="btn sm" id="kbSign" style="margin-top:10px">Sign in</button>`}
+        <button class="btn sm ghost" id="kbUp" style="margin-top:6px;padding-left:0">Owner: upload new tables to the team server</button>
       </section>
       <p class="disc">The PDF is read on this phone. Photos are read by AI through the REDEFINE team server (sign in with the team code). Client names and IC numbers are not needed or kept.</p>
     </main>`;
     $('#cam').onclick = () => $('#fCam').click();
-    $('#kbLoad').onclick = () => $('#fKb').click();
-    if ($('#kbDel')) $('#kbDel').onclick = async () => {
-      if (!(await confirmBox('Remove the GE rate tables?', 'They will be deleted from this phone. Results go back to estimates until you load them again.', 'Remove'))) return;
-      localStorage.removeItem('wif.kb'); localStorage.removeItem('wif.kbMeta'); KB = null; home(); toast('Rate tables removed');
-    };
+    $('#kbUp').onclick = () => $('#fKb').click();
+    if ($('#kbSign')) $('#kbSign').onclick = async () => { if (await signIn()) { kbState = null; home(); } };
+    if (!KB && session() && kbState === null) syncKB().then(() => { if (!location.hash) home(); });
     $('#up').onclick = () => $('#fUp').click();
     $$('[data-open]').forEach(b => b.onclick = () => openQuote(b.dataset.open));
     $$('[data-del]').forEach(b => b.onclick = async () => {
@@ -79,12 +78,28 @@
   }
   $('#fKb').addEventListener('change', async e => {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
-    let k; try { k = JSON.parse(await f.text()); } catch (err) { return fail('That file is not a GE rate-table file (.json).'); }
+    const text = await f.text();
+    let k; try { k = JSON.parse(text); } catch (err) { return fail('That file is not a GE rate-table file (.json).'); }
     if (!kbOk(k)) return fail('That file does not contain the GE rate tables (insurance rates, plans and riders).');
-    if (!(await confirmBox('Keep the GE rate tables on this phone?', 'They are GE internal agency material. They stay on this phone only and are never sent anywhere. Do not share the file with clients.', 'Keep on this phone'))) return;
-    try { localStorage.setItem('wif.kb', JSON.stringify(k)); save('wif.kbMeta', {added: new Date().toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'}), extracted: (k._meta || {}).extracted || null}); }
-    catch (err) { return fail('This phone has no room to store the tables. Free some browser storage and try again.'); }
-    KB = k; home(); toast('GE rate tables loaded');
+    const owner = await new Promise(done => {
+      const el = sheet(`<h3>Upload to the team server?</h3><p>Every signed-in REDEFINE agent will get these GE rate tables in the app. They are kept in the team's private Google Drive folder, readable only with the team code. Enter the owner code to confirm; it is used for this upload only and not saved.</p>
+        <div class="f"><label for="oc">Owner code</label><input id="oc" type="password" autocomplete="off"></div>
+        <p class="muted" id="ocMsg" role="alert" style="color:var(--err);min-height:18px"></p>
+        <div class="row"><button class="btn" data-x>Cancel</button><button class="btn primary" data-ok>Upload</button></div>`);
+      $('[data-x]', el).onclick = () => { closeSheet(); done(null); };
+      $('[data-ok]', el).onclick = async () => {
+        const code = $('#oc', el).value.trim(); if (!code) return ($('#ocMsg', el).textContent = 'Enter the owner code.');
+        $('[data-ok]', el).disabled = true; $('[data-ok]', el).textContent = 'Uploading…';
+        try { const r = await post({op: 'kbput', text}, {name: (session() || {}).name || 'owner', code}); closeSheet(); done(r); }
+        catch (err) {
+          $('#ocMsg', el).textContent = err.code === 'unauthorized' || err.code === 'not_allowed' ? 'That is not the owner code.' : err.code === 'locked' ? 'Too many wrong tries. Wait 15 minutes.'
+            : err.code === 'invalid_request' ? 'The team server needs its update first (it does not know this request yet).' : 'Could not reach the team server. Check your connection.';
+          $('[data-ok]', el).disabled = false; $('[data-ok]', el).textContent = 'Upload';
+        }
+      };
+    });
+    if (!owner) return;
+    storeKB(k, owner.ver); home(); toast('Uploaded. Agents get the new tables next time they open the app.');
   });
   ['#fCam', '#fUp'].forEach(id => $(id).addEventListener('change', e => { const f = Array.from(e.target.files || []); e.target.value = ''; if (f.length) intake(f); }));
 
@@ -136,7 +151,7 @@
       doc.destroy(); closeSheet();
       return pickAndRead(imgs);
     }
-    pickAndRead(files.map((f, i) => ({blob: f, label: 'Photo ' + (i + 1), on: true})));
+    addToTray(files);
   }
   function fail(msg) { sheet(`<h3>Could not read it</h3><p>${esc(msg)}</p><button class="btn block" data-x>OK</button>`, s => { $('[data-x]', s).onclick = closeSheet; }); }
 
@@ -150,9 +165,41 @@
     if (j.error) throw {code: j.error};
     return j;
   }
+  /* GE rate tables from the team server: downloaded once, then only when the owner uploads a new version */
+  function storeKB(k, ver) {
+    try { localStorage.setItem('wif.kb', JSON.stringify(k)); } catch (e) { toast('This phone has no room for the GE rate tables.'); return false; }
+    save('wif.kbMeta', {ver: ver || null, added: new Date().toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'}), extracted: (k._meta || {}).extracted || null});
+    KB = k; return true;
+  }
+  /* asked at most once per app opening; the answer is remembered so the home screen never loops */
+  let kbSyncing = null, kbState = null; // null = not asked yet, 'ok', or an error code
+  const KB_MSG = {
+    no_kb: 'The team server does not have GE\'s rate tables yet. Results after the last printed age are estimated.',
+    invalid_request: 'The team server needs its update before it can share GE\'s rate tables. Results after the last printed age are estimated.',
+    unauthorized: 'Please sign in again to get GE\'s rate tables.',
+    offline: 'Could not reach the team server. Results after the last printed age are estimated for now.'
+  };
+  const kbStatusText = () => KB_MSG[kbState] || (kbState && kbState !== 'ok' ? KB_MSG.offline : 'Getting GE\'s rate tables from the team server…');
+  function syncKB() {
+    if (!session() || kbSyncing) return kbSyncing || Promise.resolve();
+    kbSyncing = (async () => {
+      try {
+        const had = !!KB;
+        const r = await post({op: 'kbget', have: KB && kbMeta() ? kbMeta().ver || '' : ''});
+        kbState = 'ok';
+        if (r.same) return;
+        let k = null; try { k = JSON.parse(r.text); } catch (e) {}
+        if (kbOk(k) && storeKB(k, r.ver)) toast(had ? 'GE rate tables updated' : 'GE rate tables ready');
+      } catch (e) {
+        kbState = e.code || 'offline';
+        if (e.code === 'unauthorized') save('wif.session', null);
+      } finally { kbSyncing = null; }
+    })();
+    return kbSyncing;
+  }
   function signIn() {
     return new Promise(done => {
-      const el = sheet(`<h3>Sign in to read photos</h3><p>Photos are read by AI on the REDEFINE team server. Enter your name and the team code (the same one as Form Filler).</p>
+      const el = sheet(`<h3>Sign in to the team server</h3><p>The REDEFINE team server reads photos and shares GE\'s rate tables. Enter your name and the team code (the same one as Form Filler).</p>
         <div class="f"><label for="gName">Your name</label><input id="gName" autocomplete="name"></div>
         <div class="f"><label for="gCode">Team code</label><input id="gCode" type="password" autocomplete="current-password"></div>
         <p class="muted" id="gMsg" role="alert" style="color:var(--err);min-height:18px"></p>
@@ -188,38 +235,85 @@
     refused: 'The AI would not read this image. Try a clearer photo.', invalid_json: 'The AI answer was unreadable. Try again with fewer photos.',
     rate_limited: 'The AI is busy. Wait a minute and try again.', image_rejected: 'One photo could not be opened. Try a screenshot or a different photo.'
   };
+  /* ---------- photos: a tray of several photos of one quotation, read together ---------- */
+  const MAX_PHOTOS = 10, PER_CALL = 5; // the team server reads up to 5 images per AI call
+  let tray = [];
+  const TRAY_TIPS = [
+    ['Plan page', 'plan name and code, age, gender, smoker, sum assured, riders, payment term, premium'],
+    ['"Policy may sustain"', 'the lines "may sustain for … years up to your age …"'],
+    ['Yearly table (Table 1)', 'Scenario X / Y values and charges; two photos if it does not fit'],
+    ['Booster / rider charges', 'only if the quotation has a booster note or a rider-charge table']
+  ];
+  function showTray() {
+    tray.forEach(t => { if (!t.url) t.url = URL.createObjectURL(t.blob); });
+    const n = tray.length;
+    const el = sheet(`<h3>${n} photo${n === 1 ? '' : 's'} of this quotation</h3>
+      <p style="margin-bottom:8px">More pages help the AI. Snap these, one photo each:</p>
+      <ol class="note" style="margin:0 0 10px;padding-left:18px">${TRAY_TIPS.map(([t, d]) => `<li><b>${esc(t)}</b>: ${esc(d)}</li>`).join('')}</ol>
+      <div class="thumbs pick">${tray.map((t, i) => `<div class="th" aria-pressed="true" style="opacity:1"><img src="${t.url}" alt="Photo ${i + 1}"><span>${i + 1}</span>
+        <button type="button" data-rm="${i}" aria-label="Remove photo ${i + 1}" style="position:absolute;top:4px;right:4px;width:26px;height:26px;border-radius:50%;background:rgba(20,33,61,.85);color:#fff;font-weight:700">✕</button></div>`).join('')}</div>
+      <div class="row" style="margin-bottom:8px"><button class="btn" data-cam ${n >= MAX_PHOTOS ? 'disabled' : ''}>📷 Take another</button><button class="btn" data-gal ${n >= MAX_PHOTOS ? 'disabled' : ''}>Add from gallery</button></div>
+      <p class="muted" style="margin-bottom:10px">${n >= MAX_PHOTOS ? 'That is the most for one quotation (' + MAX_PHOTOS + ').' : 'Up to ' + MAX_PHOTOS + ' photos.'} Photos go to the REDEFINE team server and OpenAI only to be read; nothing is stored. Cover the client's name and IC if you can.</p>
+      <div class="row"><button class="btn" data-x>Cancel</button><button class="btn primary" data-ok ${n ? '' : 'disabled'}>Read ${n} with AI</button></div>`);
+    $$('[data-rm]', el).forEach(btn => btn.onclick = () => { const t = tray.splice(+btn.dataset.rm, 1)[0]; if (t && t.url) URL.revokeObjectURL(t.url); showTray(); });
+    $('[data-cam]', el).onclick = () => $('#fCam').click();
+    $('[data-gal]', el).onclick = () => $('#fUp').click();
+    $('[data-x]', el).onclick = () => { clearTray(); closeSheet(); };
+    $('[data-ok]', el).onclick = () => { const blobs = tray.map(t => t.blob); clearTray(); readImages(blobs); };
+  }
+  function clearTray() { tray.forEach(t => t.url && URL.revokeObjectURL(t.url)); tray = []; }
+  function addToTray(files) {
+    const room = MAX_PHOTOS - tray.length;
+    files.slice(0, Math.max(0, room)).forEach(f => tray.push({blob: f}));
+    if (files.length > room) toast('Up to ' + MAX_PHOTOS + ' photos per quotation.');
+    showTray();
+  }
+
+  /* PDF pages that could not be read directly: pick pages, then read them like photos */
   async function pickAndRead(items) {
-    const max = CFG.maxPhotosPerRead || 4;
     const urls = items.map(it => (it.url = URL.createObjectURL(it.blob)));
-    const el = sheet(`<h3 id="pickH"></h3><p>Pick the page with the yearly table (Table 1). Add the page with "the policy may sustain for…" if you have it: it makes the later years more accurate.</p>
+    const el = sheet(`<h3 id="pickH"></h3><p>Tap the pages to read: the plan page (plan, age, sum assured, riders, payment term), the page with "the policy may sustain for…", and the yearly table (Table 1).</p>
       <div class="thumbs pick">${items.map((it, i) => `<button type="button" class="th" data-i="${i}" aria-pressed="${!!it.on}"><img src="${it.url}" alt=""><span>${esc(it.label)}</span></button>`).join('')}</div>
       <p id="pickP" class="muted"></p>
       <div class="row"><button class="btn" data-x>Cancel</button><button class="btn primary" data-ok>Read with AI</button></div>`);
     const refresh = () => {
       const n = items.filter(it => it.on).length;
-      $('#pickH', el).textContent = `Send ${n} image${n === 1 ? '' : 's'} to the AI?`;
-      $('#pickP', el).textContent = (n > max ? `Choose up to ${max}. ` : '') + 'Images go to the REDEFINE team server and OpenAI only to be read; nothing is stored. Cover the client\'s name and IC if you can.';
-      $('[data-ok]', el).disabled = !n || n > max;
+      $('#pickH', el).textContent = `Send ${n} page${n === 1 ? '' : 's'} to the AI?`;
+      $('#pickP', el).textContent = (n > MAX_PHOTOS ? `Choose up to ${MAX_PHOTOS}. ` : '') + 'Pages go to the REDEFINE team server and OpenAI only to be read; nothing is stored.';
+      $('[data-ok]', el).disabled = !n || n > MAX_PHOTOS;
     };
-    $$('.th', el).forEach(b => b.onclick = () => { const it = items[+b.dataset.i]; it.on = !it.on; b.setAttribute('aria-pressed', it.on); refresh(); });
+    $$('.th', el).forEach(btn => btn.onclick = () => { const it = items[+btn.dataset.i]; it.on = !it.on; btn.setAttribute('aria-pressed', it.on); refresh(); });
     refresh();
     const go = await new Promise(done => { $('[data-x]', el).onclick = () => done(false); $('[data-ok]', el).onclick = () => done(true); });
     const chosen = items.filter(it => it.on).map(it => it.blob);
-    closeSheet();
-    if (!go) { urls.forEach(URL.revokeObjectURL); return; }
-    if (!session() && !(await signIn())) { urls.forEach(URL.revokeObjectURL); return; }
-    sheet('<h3>Reading the quotation…</h3><div class="spin"></div><p style="text-align:center">Usually 20–60 seconds. Keep this screen open.</p>'); $('#sheet').dataset.lock = '1';
+    urls.forEach(URL.revokeObjectURL); closeSheet();
+    if (go) readImages(chosen);
+  }
+
+  /* send to the AI, 5 images per call, then merge the answers */
+  async function readImages(blobs) {
+    if (!blobs.length) return;
+    if (!session() && !(await signIn())) return;
+    const box = sheet('<h3>Reading the quotation…</h3><div class="spin"></div><p id="rdMsg" style="text-align:center">Usually 20–60 seconds. Keep this screen open.</p>'); $('#sheet').dataset.lock = '1';
     try {
-      const images = [];
-      for (const b of chosen) { try { images.push(await toJpegB64(b)); } catch (e) { throw {code: 'image_rejected'}; } }
-      const r = await post({op: 'ai', prompt: WIFParse.aiPrompt(), images});
-      if (r.truncated) throw {code: 'invalid_json'};
-      const data = WIFParse.fromAI(parseJSON(r.text));
-      closeSheet(); urls.forEach(URL.revokeObjectURL);
-      if (!data.rows.length) return fail('No yearly table was found in those images. Take a photo of the page titled "Table 1" with Scenario X and Scenario Y columns.');
-      review(data, data.unclear.map(u => 'AI not sure: ' + u), false);
+      const parts = [];
+      for (let i = 0; i < blobs.length; i += PER_CALL) {
+        const part = blobs.slice(i, i + PER_CALL);
+        if (blobs.length > PER_CALL) $('#rdMsg', box).textContent = `Reading photos ${i + 1}–${i + part.length} of ${blobs.length}…`;
+        const images = [];
+        for (const bl of part) { try { images.push(await toJpegB64(bl)); } catch (e) { throw {code: 'image_rejected'}; } }
+        const r = await post({op: 'ai', prompt: WIFParse.aiPrompt(), images});
+        if (r.truncated) throw {code: 'invalid_json'};
+        parts.push(WIFParse.fromAI(parseJSON(r.text)));
+      }
+      const data = WIFParse.mergeAI(parts);
+      closeSheet();
+      if (!data.rows.length) return fail('No yearly table was found in those photos. Add a photo of the page titled "Table 1" with Scenario X and Scenario Y columns.');
+      const notes = data.unclear.map(u => 'AI not sure: ' + u);
+      if (!data.policy || !data.policy.code) notes.push('The plan page was not found, so GE\'s rate tables cannot be matched. Fill in the plan code and riders below, or add a photo of the plan page.');
+      review(data, notes, false);
     } catch (e) {
-      closeSheet(); urls.forEach(URL.revokeObjectURL);
+      closeSheet();
       if (e.code === 'unauthorized') { save('wif.session', null); toast('Please sign in again.'); return; }
       fail(AI_ERR[e.code] || 'Something went wrong (' + (e.code || 'error') + '). Try again.');
     }
@@ -367,7 +461,7 @@
           <p class="muted">Years the quotation does not print use GE's own insurance and rider rates${model.table.maxDev !== null ? `. At the ${model.table.checked} printed years, the tables are within ${(model.table.maxDev * 100).toFixed(model.table.maxDev < 0.01 ? 2 : 1)}% of the quotation's charges` : ''}. Rates can be revised by GE; medical rider rates often are.</p>
           ${model.table.notes.length ? `<p class="muted" style="color:var(--warn)">${model.table.notes.map(esc).join(' ')}</p>` : ''}</div></div>`
         : (model.tableNotes && model.tableNotes.length ? `<p class="muted" style="color:var(--warn);margin-top:8px">${model.tableNotes.map(esc).join(' ')} Years after the last printed age are estimated.</p>`
-        : (!KB ? '<p class="muted" style="margin-top:8px">GE rate tables are not loaded on this phone, so years after the last printed age are estimated. Load them on the home screen for GE\'s own rates.</p>' : '<p class="muted" style="color:var(--warn);margin-top:8px">This quotation has no plan code, so GE\'s rate tables were not used. Tap "Check the figures" and fill in the plan details (or upload the PDF again).</p>'))}
+        : (!KB ? '<p class="muted" style="margin-top:8px">GE rate tables are not loaded on this phone, so years after the last printed age are estimated. Sign in with the team code on the home screen to get GE\'s own rates.</p>' : '<p class="muted" style="color:var(--warn);margin-top:8px">This quotation has no plan code, so GE\'s rate tables were not used. Tap "Check the figures" and fill in the plan details (or upload the PDF again).</p>'))}
         <details><summary>How it works</summary><ul class="note">
           <li>The app uses the quotation's allocated premium and charges for each year, deducted monthly, and fits the fund's tax (${pct1(model.costs.tax)}) and fund management charge (${(model.costs.fmc * 100).toFixed(2)}% a year) to GE's figures.</li>
           ${model.table ? `<li>For years the quotation skips or stops printing, charges come from GE's rate tables for this plan, age, gender, smoker status and riders, scaled to the quotation's own printed charges. Waiver riders are charged on the value of the premiums still to be waived.</li>` : `<li>For years the quotation skips (for example 11–14), charges are filled in between the printed years and fine-tuned so GE's ${pct(model.rates.x)} and ${pct(model.rates.y)} values come out the same.</li>`}
@@ -449,4 +543,5 @@
   window.addEventListener('popstate', () => { if (!location.hash) home(); });
   const h = location.hash.match(/q=([\w-]+)/);
   if (h && byId(h[1])) openQuote(h[1]); else home();
+  if (KB && session()) syncKB();
 })();
