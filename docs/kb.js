@@ -42,12 +42,17 @@
     const coi = prod.coi || {}, table = kb.coi_tables[coi.table];
     if (!table) return {ok: false, reason: 'table', notes: ['No insurance-rate table for ' + prod.name + '.']};
     const g = pol.gender === 'F' ? 'F' : 'M', s = pol.smoker === 'Y' ? 'Y' : 'N', occ = String(pol.occ || '1');
+    /* wealth plans: prevailing sum assured = X% of premiums paid so far; amount at risk measured against the IPA */
+    const ps = prod.prevailing_sum_assured;
+    const prevailing = !!ps, riskIPA = (prod.accounts || []).includes('IPA');
+    const psaPct = ps ? (pol.entryAge <= 55 ? ps.x_pct_entry_le55 : ps.x_pct_entry_ge56) / 100 : 0;
+    const premYearsPaid = y => Math.min(y, +pol.premiumYears || termYears);
     const bsa = +pol.bsa || 0;
+    const saAt = y => prevailing ? psaPct * (+pol.premium || 0) * premYearsPaid(y) : bsa;
     let disc = 0;
     for (const b of prod.lsad || []) if (bsa >= b.sa_from && (b.sa_to === null || bsa <= b.sa_to)) disc = b.discount_pct / 100;
     const netSA = coi.basis === 'NET_SA';
     if (coi.basis && !['BSA', 'NET_SA'].includes(coi.basis)) notes.push('Insurance basis ' + coi.basis + ' is not modelled; using the quotation where printed.');
-    if (prod.accounts && prod.accounts.length > 1) notes.push('This plan has more than one account (IPA / TUPA) and supplementary charges; results are rougher.');
     const fee = (prod.policy_fee_monthly !== undefined ? prod.policy_fee_monthly : 6) * 12;
     const premYears = +pol.premiumYears || termYears;
 
@@ -68,8 +73,8 @@
       const waived = y <= (coi.waived_policy_years || 0);
       let fixed = fee, q = 0;
       const basic = waived ? 0 : rBasic / 1000 * (1 - disc);
-      if (netSA) q += basic; else fixed += basic * bsa;
-      const part = {basic: netSA ? basic : basic * bsa, riders: {}};
+      if (netSA) q += basic; else fixed += basic * saAt(y);
+      const part = {basic: netSA ? basic : basic * saAt(y), riders: {}};
       for (const r of riders) {
         if (y > r.years) continue;
         let c = 0;
@@ -104,10 +109,10 @@
         }
         part.riders[r.code] = c;
       }
-      years.push({fixed, q, sa: bsa}); parts.push(part);
+      years.push({fixed, q, sa: saAt(y)}); parts.push(part);
     }
     if (unknown.length) notes.push('Not in the GE rate tables: ' + unknown.join(', ') + '. Their charges come from the quotation only.');
-    return {ok: true, product: prod, name: prod.name, years, parts, unknown, notes, netSA, fundFmc: null};
+    return {ok: true, product: prod, name: prod.name, years, parts, unknown, notes, netSA, prevailing, riskIPA, fundFmc: null};
   }
 
   const api = {build, rowAt, rateOf, WAIVER_RATE};

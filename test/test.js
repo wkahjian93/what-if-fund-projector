@@ -40,6 +40,18 @@ ok(s0.ok && s0.growth.extra < 0.97, 'without the booster the app would have to b
 const sHi = W.project(s, 0.06), sLo = W.project(s, 0.05);
 ok(sHi.sustainsToAge > sLo.sustainsToAge, 'SRM 6% lasts longer than 5%');
 
+// 3b. Smart Wealth Global: three tables, two accounts (IPA / TUPA), prevailing sum assured, supplementary charge, % bonuses
+const swg = require('./fixture-swg.json');
+ok(swg.policy.code === '8031' && swg.rows.length === 17 && swg.rows[0].sa === 37500 && swg.rows[4].tupaX === 4328, 'SWG: all three tables read and joined by year');
+ok(swg.ipaBonus && swg.ipaBonus.loyalty.pct === 0.03 && swg.ipaBonus.loyalty.every === 5 && swg.ipaBonus.booster.pct === 0.06 && swg.ipaBonus.booster.year === 30, 'SWG: loyalty 3% every 5 years and booster 6% at year 30 read');
+const g = W.calibrate(swg);
+ok(g.ok && g.twoAccounts && g.level, 'SWG: calibrates as a two-account plan');
+const sp = [1, 2, 3, 4, 5, 6].map(y => Object.values(g.suppPcts[y]).reduce((a, b) => a + b, 0) / Object.values(g.suppPcts[y]).length);
+ok([0.035, 0.03, 0.025, 0.02, 0.02, 0.01].every((v, i) => Math.abs(sp[i] - v) < 0.001), 'SWG: supplementary charge works out to GE\'s schedule 3.5/3/2.5/2/2/1% (' + sp.map(v => (v * 100).toFixed(2)).join('/') + ')');
+ok(g.accuracy.lapse.x.app === 89 && g.accuracy.lapse.y.app === 100, 'SWG: run-out ages 89 / 100 match GE');
+ok(g.accuracy.maxErr < 0.03, 'SWG: within 3% of every printed GE value (' + (g.accuracy.maxErr * 100).toFixed(2) + '%)');
+ok(W.project(g, 0.022).fullTerm && !W.project(g, 0.015).fullTerm, 'SWG: about 2.2% lasts to 100, 1.5% does not');
+
 // 4. messy / missing data is refused, not guessed
 const bad = clone(spy); bad.rows[3].tivY = null;
 ok(W.check(bad).problems.some(p => /year 4/.test(p) && /Y/.test(p)), 'missing value is flagged with its row');
@@ -111,6 +123,9 @@ else {
   ok(mt.accuracy.maxErr < 0.01 && st.accuracy.maxErr < 0.01, 'with tables, fund values within 1% of every GE printed value');
   ok(W.project(mt, 0.08).fullTerm, 'SPY with tables: 8% lasts to 100');
   const n = W.minReturn(mt); ok(n > 0.07 && n < 0.08, 'SPY with tables: about 7.5% needed to last to 100 (' + (n * 100).toFixed(2) + '%)');
+  const gt = W.calibrate(swg, kb);
+  ok(gt.table && gt.table.maxDev < 0.1, 'SWG: GE tables within 10% of the insurance rates read from the quotation (' + (gt.table.maxDev * 100).toFixed(1) + '%)');
+  ok(gt.accuracy.lapse.x.app === 89 && gt.accuracy.lapse.y.app === 100 && gt.accuracy.maxErr < 0.03, 'SWG with tables, no tuning: run-out ages 89 / 100 and values within 3%');
   const wrong = clone(spy); wrong.policy.code = '9999';
   const mw = W.calibrate(wrong, kb); ok(mw.ok && !mw.table && mw.tableNotes.length, 'unknown plan code falls back to estimates with a note');
 }

@@ -56,6 +56,27 @@
       rows.push({year: n[0], age: n[1], premium: n[2], alloc: n[3], basicX: bX, basicY: bY, chargesX: cX, chargesY: cY,
         fmcX: n[e - 9], fmcY: n[e - 8], sa: n[e - 7], tivX: n[e - 6], tivY: n[e - 5]});
     }
+    /* Wealth plans (e.g. Smart Wealth Global) split the yearly figures over three tables:
+       1a charges (incl. supplementary charge), 1b prevailing sum assured and fund values, 1c fund split IPA / TUPA */
+    const iA = all.findIndex(t => /Table 1a:/.test(t)), iB = all.findIndex(t => /Table 1b:/.test(t)), iC = all.findIndex(t => /Table 1c:/.test(t));
+    let split = false, frontEnd = tIdx;
+    if (iA >= 0 && iB > iA) {
+      const stopAt = from => { let j = from + 1; while (j < all.length && !/Table \d|Jadual|Product Disclosure|Risalah/.test(all[j])) j++; return j; };
+      const seg = (from, to, min) => L.slice(from, to).flat().map(numTokens).filter(n => n && n.length >= min);
+      const byYear = {};
+      const at = y => (byYear[y] = byYear[y] || {year: y});
+      for (const n of seg(iA, iB, 16)) {
+        const e = n.length, ins = n.slice(5, e - 9), other = n[e - 9];
+        const xs = ins.filter((v, i) => i % 2 === 0), ys = ins.filter((v, i) => i % 2 === 1);
+        Object.assign(at(n[0]), {age: n[1], premium: n[2], alloc: n[3], basicX: xs[0], basicY: ys[0],
+          chargesX: xs.reduce((a, b) => a + b, 0) + other, chargesY: ys.reduce((a, b) => a + b, 0) + other,
+          suppX: n[e - 8], suppY: n[e - 7], fmcX: n[e - 4], fmcY: n[e - 3]});
+      }
+      for (const n of seg(iB, iC > iB ? iC : stopAt(iB), 12)) Object.assign(at(n[0]), {sa: n[5], tivX: n[6], tivY: n[7]});
+      if (iC > 0) for (const n of seg(iC, stopAt(iC), 14)) { const e = n.length; Object.assign(at(n[0]), {ipaX: n[5], ipaY: n[6], tupaX: n[e - 4], tupaY: n[e - 3]}); }
+      const merged = Object.values(byYear).filter(r => r.chargesX !== undefined && r.tivX !== undefined).sort((a, b) => a.year - b.year);
+      if (merged.length >= 3) { rows.length = 0; rows.push(...merged); split = true; frontEnd = iA; }
+    }
     if (rows.length < 3) return {ok: false, reason: 'no_rows'};
     const pick = re => { const m = front.match(re); return m ? m[1].trim() : null; };
     const pLine = front.split('\n').find(l => /Product Name/.test(l)) || '';
@@ -63,10 +84,14 @@
       .replace(/^\d{3,5}\s+/, '').replace(/\s+/g, ' ').replace(/\s([A-Z][A-Z0-9]*(?:-\d+)?)$/, ' ($1)').trim() || null;
     /* bonus credited into the fund, e.g. "Booster reward of RM25,000.00 will be credited into your total investment value
        on the policy anniversary of age 65 years next birthday, and every 10 years thereafter" */
-    const notesText = all.slice(0, Math.min(all.length, tIdx + 3)).join(' ').replace(/[\s|]+/g, ' ');
+    const notesText = all.slice(0, Math.min(all.length, (iC > 0 ? iC : tIdx) + 3)).join(' ').replace(/[\s|=]+/g, ' ');
     const bm = notesText.match(/(Booster reward|Loyalty bonus|[A-Z][a-z]+ bonus|[A-Z][a-z]+ reward)\s+of\s+RM\s?([\d,]+(?:\.\d+)?)\s+will be credited[^.]*?age\s+(\d+)\s+years next birthday(?:,?\s+and every\s+(\d+)\s+years thereafter)?/i);
     const bonus = bm ? {name: bm[1].replace(/\s+/g, ' '), amount: toNum(bm[2]), age: +bm[3], every: bm[4] ? +bm[4] : null} : null;
-    if (/booster|loyalty bonus|bonus will be credited|reward will be credited/i.test(notesText) && !bonus) notes.push('The quotation mentions a booster or bonus that the app could not read. Type it in below if it adds to the fund.');
+    /* bonuses as a % of the IPA, credited into the TUPA (wealth plans) */
+    const lm = notesText.match(/(\d+(?:\.\d+)?)% of total investment value in IPA will be credited into TUPA starting from the end of (\d+)\s*(?:st|nd|rd|th)?\s*policy year and every (\d+) years/i);
+    const xm = notesText.match(/(\d+(?:\.\d+)?)% of total investment value in IPA will be credited into TUPA at the end of (\d+)\s*(?:st|nd|rd|th)?\s*policy year/i);
+    const ipaBonus = lm || xm ? {loyalty: lm ? {pct: +lm[1] / 100, first: +lm[2], every: +lm[3]} : null, booster: xm ? {pct: +xm[1] / 100, year: +xm[2]} : null} : null;
+    if (/booster|loyalty bonus|bonus will be credited|reward will be credited/i.test(notesText) && !bonus && !ipaBonus) notes.push('The quotation mentions a booster or bonus that the app could not read. Type it in below if it adds to the fund.');
     const sus = {};
     const susRe = /(\d+)\s+years up to your age\s+(\d+)\s+years next birthday under ([^;\n.]+)/g;
     let m; while ((m = susRe.exec(front))) {
@@ -97,7 +122,7 @@
       source: 'pdf', product: product || 'Investment-linked plan', fund: funds ? funds.trim() : null,
       entryAge: ageNB ? +ageNB : rows[0].age - rows[0].year, premium: prem ? toNum(prem) : rows[0].premium, mode: mode || null,
       termYears: Math.max(term ? +term : 0, rows[rows.length - 1].year),
-      rates: {x: rx ? +rx[1] / 100 : null, y: ry ? +ry[1] / 100 : null}, sustain: sus, bonus, rows,
+      rates: {x: rx ? +rx[1] / 100 : null, y: ry ? +ry[1] / 100 : null}, sustain: sus, bonus, ipaBonus, rows,
       policy: {code, gender: gender ? gender[0] : null, smoker: smoker ? smoker[0] : null, occ: occ || null,
         bsa: ipNums && ipNums.length >= 2 ? ipNums[1] : null, premium: prem ? toNum(prem) : null, premiumYears: term ? +term : null, riders}
     };
@@ -119,8 +144,11 @@ Return ONLY JSON:
  "bonus": {"name": string, "amount": number, "first_age_next_birthday": number, "every_years": number|null} | null,
  "rows": [{"year": number, "age": number|null, "premium_paid": number|null, "allocated_premium": number|null,
    "insurance_charges_x": number|null, "insurance_charges_y": number|null, "basic_charge_x": number|null, "basic_charge_y": number|null, "other_charges": number|null, "fmc_x": number|null, "fmc_y": number|null,
-   "sum_assured": number|null, "value_x": number|null, "value_y": number|null}],
+   "sum_assured": number|null, "value_x": number|null, "value_y": number|null,
+   "supplementary_charge_x": number|null, "supplementary_charge_y": number|null, "ipa_value_x": number|null, "ipa_value_y": number|null, "tupa_value_x": number|null, "tupa_value_y": number|null}],
+ "ipa_bonus": {"loyalty_pct": number|null, "loyalty_first_year": number|null, "loyalty_every_years": number|null, "booster_pct": number|null, "booster_year": number|null} | null,
  "unclear": [string]}
+Wealth plans (e.g. Smart Wealth Global) split the yearly figures over Table 1a (charges, incl. supplementary charge), Table 1b (prevailing sum assured and total investment value) and Table 1c (Insurance Premium Account IPA and Top-up Premium Account TUPA values): combine them by policy year; use the prevailing sum assured as sum_assured. Their notes give bonuses as "% of total investment value in IPA credited into TUPA": put those in ipa_bonus. For other plans leave the supplementary, IPA, TUPA and ipa_bonus fields null.
 Rules: copy numbers exactly as printed, without commas. insurance_charges_x / _y = basic plan insurance charge + all unit-deducting rider charges for that scenario (not the fund management charge); if the table prints one set of insurance charges for both scenarios, put the same numbers in _x and _y. basic_charge_x / _y = the basic plan part only. Include every printed policy-year row, including rows of zeros. If a number is blurred, cut off or you are not sure, put null and say which in "unclear". Never guess or calculate a missing number. Do not return the client's name or IC number.`;
 
   function fromAI(j) {
@@ -131,7 +159,8 @@ Rules: copy numbers exactly as printed, without commas. insurance_charges_x / _y
       return {year: n(r.year), age: n(r.age), premium: n(r.premium_paid), alloc: n(r.allocated_premium),
         chargesX: ix === null || oth === null ? null : ix + oth, chargesY: iy === null || oth === null ? null : iy + oth,
         basicX: n(r.basic_charge_x), basicY: n(r.basic_charge_y), fmcX: n(r.fmc_x), fmcY: n(r.fmc_y), sa: n(r.sum_assured),
-        tivX: n(r.value_x), tivY: n(r.value_y)};
+        tivX: n(r.value_x), tivY: n(r.value_y), suppX: n(r.supplementary_charge_x), suppY: n(r.supplementary_charge_y),
+        ipaX: n(r.ipa_value_x), ipaY: n(r.ipa_value_y), tupaX: n(r.tupa_value_x), tupaY: n(r.tupa_value_y)};
     }).filter(r => r.year !== null).sort((a, b) => a.year - b.year);
     const rx = n(j.rate_x_percent), ry = n(j.rate_y_percent);
     const entry = n(j.entry_age_next_birthday);
@@ -143,7 +172,10 @@ Rules: copy numbers exactly as printed, without commas. insurance_charges_x / _y
       sustain: {x: n(j.sustain_age_x), y: n(j.sustain_age_y), best: n(j.sustain_age_best_estimate)},
       bonus: j.bonus && n(j.bonus.amount) && n(j.bonus.first_age_next_birthday) ? {name: String(j.bonus.name || 'Bonus'), amount: n(j.bonus.amount), age: n(j.bonus.first_age_next_birthday), every: n(j.bonus.every_years)} : null,
       rows, unclear: Array.isArray(j.unclear) ? j.unclear.map(String) : [],
-      policy: {code: j.product_code ? String(j.product_code).replace(/D/g, '').slice(0, 4) || null : null, gender: j.gender ? String(j.gender)[0].toUpperCase() : null,
+      ipaBonus: j.ipa_bonus && (n(j.ipa_bonus.loyalty_pct) || n(j.ipa_bonus.booster_pct)) ? {
+        loyalty: n(j.ipa_bonus.loyalty_pct) ? {pct: n(j.ipa_bonus.loyalty_pct) / 100, first: n(j.ipa_bonus.loyalty_first_year) || 5, every: n(j.ipa_bonus.loyalty_every_years) || 5} : null,
+        booster: n(j.ipa_bonus.booster_pct) ? {pct: n(j.ipa_bonus.booster_pct) / 100, year: n(j.ipa_bonus.booster_year)} : null} : null,
+      policy: {code: j.product_code ? String(j.product_code).replace(/\D/g, '').slice(0, 4) || null : null, gender: j.gender ? String(j.gender)[0].toUpperCase() : null,
         smoker: j.smoker ? String(j.smoker)[0].toUpperCase() : null, occ: n(j.occupation_class) ? String(n(j.occupation_class)) : null,
         bsa: n(j.basic_sum_assured), premium: n(j.annual_premium), premiumYears: n(j.premium_term_years),
         riders: Array.isArray(j.riders) ? j.riders.filter(r => r && r.code).map(r => ({code: String(r.code).toUpperCase().trim(), name: String(r.name || ''), years: n(r.years), sa: n(r.sum_assured)})) : []}
@@ -162,7 +194,7 @@ Rules: copy numbers exactly as printed, without commas. insurance_charges_x / _y
     const fill = (o, src, keys) => keys.forEach(k => { if (blank(o[k]) && !blank(src[k])) o[k] = src[k]; });
     for (const d of list.slice(1)) {
       if ((!out.product || out.product === 'Investment-linked plan') && d.product && d.product !== 'Investment-linked plan') out.product = d.product;
-      fill(out, d, ['entryAge', 'premium', 'bonus']);
+      fill(out, d, ['entryAge', 'premium', 'bonus', 'ipaBonus']);
       out.termYears = Math.max(out.termYears || 0, d.termYears || 0);
       fill(out.rates, d.rates || {}, ['x', 'y']);
       fill(out.sustain, d.sustain || {}, ['x', 'y', 'best']);
