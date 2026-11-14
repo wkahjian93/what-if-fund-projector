@@ -1,4 +1,4 @@
-# What-If Fund Projector
+# REDEFINE Calculator (formerly What-If Fund Projector)
 
 **Problem:** a GE investment-linked quotation shows the fund value only at 2% (Scenario X) and 5% (Scenario Y). When a client asks "what if it earns 8%?" or "will it last to 100?", there is no answer on the spot.
 

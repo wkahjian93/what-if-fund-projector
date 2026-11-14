@@ -44,7 +44,7 @@
   /* ---------- home ---------- */
   function home() {
     location.hash = ''; app.oninput = null;
-    app.innerHTML = bar('What-If Fund Projector', 'REDEFINE · INVESTMENT-LINKED') + `<main class="wrap">
+    app.innerHTML = bar('REDEFINE Calculator', 'ILP WHAT-IF · TVM · LOANS') + `<main class="wrap">
       <section class="card hero"><h2>Beyond 2% and 5%</h2>
         <div class="big">What if the fund earns 8%?</div>
         <p>Snap the quotation pages (plan, riders, yearly table) or upload the MPOS PDF. See the fund value and how long the policy lasts at any return.</p>

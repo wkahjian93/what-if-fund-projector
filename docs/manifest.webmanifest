@@ -1,7 +1,7 @@
 {
-  "name": "What-If Fund Projector",
-  "short_name": "What-If Fund",
-  "description": "Snap an investment-linked quotation and see the fund value and how long the policy lasts at any return.",
+  "name": "REDEFINE Calculator",
+  "short_name": "REDEFINE Calc",
+  "description": "ILP what-if projections from GE quotations, TVM calculator and loan calculator for REDEFINE agents.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
