@@ -139,3 +139,7 @@ details[open] summary::after{content:" ▴"}
 /* calculator answer */
 #tvmOut b{color:var(--ink);font-size:16px}
 #tvmOut b[style]{font-size:14px}
+
+/* REDEFINE logo */
+.bar .mark{height:30px;width:auto;flex:none;margin-left:2px}
+.footlogo{display:block;width:110px;height:auto;margin:22px auto 6px;opacity:.9}

@@ -34,7 +34,7 @@
 
   const app = $('#app');
   const bar = (title, sub, back) => `<header class="bar">${back ? '<button class="ib" id="back" aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button>' : ''}
-    <div class="brand"><b>${esc(title)}</b><span>${esc(sub)}</span></div></header>`;
+    <img class="mark" src="logo-mark.png" alt="REDEFINE"><div class="brand"><b>${esc(title)}</b><span>${esc(sub)}</span></div></header>`;
   const ICON = {
     cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
     up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 15v5h16v-5"/></svg>',
@@ -66,6 +66,7 @@
              <button class="btn sm" id="kbSign" style="margin-top:10px">Sign in</button>`}
         <button class="btn sm ghost" id="kbUp" style="margin-top:6px;padding-left:0">Owner: upload new tables to the team server</button>
       </section>
+      <img class="footlogo" src="logo.png" alt="REDEFINE">
       <p class="disc">The PDF is read on this phone. Photos are read by AI through the REDEFINE team server (sign in with the team code). Client names and IC numbers are not needed or kept.</p>
     </main>`;
     $('#cam').onclick = () => $('#fCam').click();
