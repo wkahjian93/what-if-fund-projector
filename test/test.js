@@ -148,4 +148,26 @@ else {
   ok(S.call(Object.assign({op: 'login'}, T)).ok, 'server: existing sign-in still works');
 }
 
+// 9. calculators: TVM and loans, against known answers
+{
+  const C = require('../docs/calc.js'), near = (a, b, d) => Math.abs(a - b) <= d;
+  ok(near(C.solve('rate', {pv: -100, fv: 638, n: 20, ppy: 1}), 9.71, 0.005), 'TVM: RM100 to RM638 in 20 years = 9.71% a year');
+  ok(near(C.solve('fv', {pv: -100, rate: 9.71, n: 20, ppy: 1}), 638, 0.5), 'TVM: future value');
+  ok(near(C.solve('pv', {fv: 638, rate: 9.71, n: 20, ppy: 1}), -100, 0.1), 'TVM: present value');
+  ok(near(C.solve('n', {pv: -100, fv: 638, rate: 9.71, ppy: 1}), 20, 0.01), 'TVM: number of periods');
+  ok(near(C.solve('pmt', {pv: 550000, rate: 3.6, n: 360, ppy: 12}), -2500.55, 0.005), 'TVM: payment = RM2,500.55 home loan instalment');
+  const sb = C.solve('pmt', {fv: 100000, rate: 6, n: 120, ppy: 12, begin: true}), se = C.solve('pmt', {fv: 100000, rate: 6, n: 120, ppy: 12});
+  ok(Math.abs(sb) < Math.abs(se), 'TVM: paying at the start of each period needs less than at the end');
+  ok(C.solve('pmt', {pv: 1200, rate: 0, n: 12, ppy: 12}) === -100, 'TVM: 0% rate works');
+  ok(isNaN(C.solve('rate', {pv: 100, fv: 638, n: 20, ppy: 1})), 'TVM: impossible signs give no answer instead of a wrong one');
+  const h = C.amortised(550000, 3.6, 360, 0);
+  ok(near(h.monthly, 2500.55, 0.005) && near(h.totalInterest, 350198, 1) && near(h.constant * 100, 5.46, 0.005), 'Home loan: RM2,500.55 a month, RM350,198 interest, 5.46% constant');
+  const hx = C.amortised(550000, 3.6, 360, 500);
+  ok(hx.months < 360 && hx.totalInterest < h.totalInterest && hx.years[hx.years.length - 1].balance === 0, 'Home loan: extra payments finish early and save interest');
+  const car = C.hirePurchase(200000, 2.7, 84);
+  ok(near(car.monthly, 2830.95, 0.005) && near(car.totalInterest, 37800, 0.01), 'Car hire purchase: RM200k at 2.7% flat for 7 years = RM2,830.95 a month');
+  ok(near(car.effectiveRate, 5.04, 0.01), 'Car hire purchase: 2.7% flat is about 5.04% effective');
+  ok(near(C.amortised(200000, 2.7, 84, 0).monthly, 2615.71, 0.005), 'Car on reducing balance: RM2,615.71 a month');
+}
+
 console.log(pass + ' passed, ' + fail + ' failed'); process.exit(fail ? 1 : 0);

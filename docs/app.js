@@ -50,6 +50,10 @@
         <p>Snap the quotation pages (plan, riders, yearly table) or upload the MPOS PDF. See the fund value and how long the policy lasts at any return.</p>
         <div class="big2"><button class="btn primary" id="cam">${ICON.cam}Take photo</button><button class="btn" id="up">${ICON.up}Upload PDF or photos</button></div>
       </section>
+      <section class="card"><h2>Calculators</h2>
+        <div class="row"><button class="btn" id="goTvm">TVM calculator</button><button class="btn" id="goLoan">Loan calculator</button></div>
+        <p class="muted" style="margin-top:8px">Time value of money (cost of delay, savings goals, returns), home loans and Malaysian car hire purchase.</p>
+      </section>
       <section><h2 class="muted" style="margin:6px 4px 8px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;font-size:12px">Quotations on this phone</h2>
         ${all().map(q => `<div class="item"><button class="t" data-open="${esc(q.id)}" style="text-align:left"><b>${esc(q.label)}</b>
           <span>${esc(q.data.product)} · ${q.data.premium ? rm(q.data.premium) + ' a year · ' : ''}${esc(q.saved)}</span></button>
@@ -65,6 +69,7 @@
       <p class="disc">The PDF is read on this phone. Photos are read by AI through the REDEFINE team server (sign in with the team code). Client names and IC numbers are not needed or kept.</p>
     </main>`;
     $('#cam').onclick = () => $('#fCam').click();
+    $('#goTvm').onclick = tvmScreen; $('#goLoan').onclick = () => loanScreen();
     $('#kbUp').onclick = () => $('#fKb').click();
     if ($('#kbSign')) $('#kbSign').onclick = async () => { if (await signIn()) { kbState = null; home(); } };
     if (!KB && session() && kbState === null) syncKB().then(() => { if (!location.hash) home(); });
@@ -542,8 +547,123 @@
     window.scrollTo(0, 0);
   }
 
+  /* ---------- calculators ---------- */
+  const numIn = v => { const t = String(v).replace(/[,\sRM%]/gi, ''); return t === '' || t === '-' || isNaN(+t) ? null : +t; };
+  const fmt = (v, d = 2) => v === null || v === undefined || !isFinite(v) ? '' : (Math.round(v * Math.pow(10, d)) / Math.pow(10, d)).toLocaleString('en-MY', {minimumFractionDigits: d, maximumFractionDigits: d});
+  const money = v => (v < 0 ? '−RM' + fmt(-v) : 'RM' + fmt(v));
+  const flow = v => money(v) + (v < 0 ? ' (you pay)' : v > 0 ? ' (you get)' : '');
+  const calcSave = (k, o) => save('wif.calc.' + k, o), calcLoad = (k, d) => load('wif.calc.' + k, d);
+  const selStyle = 'style="min-height:44px;border:1px solid var(--line);border-radius:10px;padding:0 8px;background:#fff"';
+
+  function tvmScreen() {
+    location.hash = 'tvm'; app.oninput = null;
+    const st = calcLoad('tvm', {pv: '-100', pmt: '', fv: '', rate: '8', n: '20', ppy: 1, begin: false});
+    const F = [['pv', 'Present value (PV)', 'money now; paying in = minus'], ['pmt', 'Payment each period (PMT)', 'regular saving = minus'],
+      ['fv', 'Future value (FV)', 'money at the end'], ['rate', 'Return / interest (% a year)', ''], ['n', 'Number of periods', '']];
+    const fieldHtml = ([k, l, h]) => '<div class="f"><label for="t_' + k + '">' + esc(l) + (h ? ' <span style="font-weight:400">· ' + esc(h) + '</span>' : '') + '</label>'
+      + '<div class="row" style="align-items:center"><input id="t_' + k + '" inputmode="decimal" value="' + esc(st[k]) + '" style="flex:3"><button class="btn sm" data-solve="' + k + '" style="flex:1">Solve</button></div></div>';
+    const ppyOpts = [[1, 'Yearly'], [2, 'Half-yearly'], [4, 'Quarterly'], [12, 'Monthly']].map(([v, l]) => '<option value="' + v + '"' + (+st.ppy === v ? ' selected' : '') + '>' + l + '</option>').join('');
+    app.innerHTML = bar('TVM calculator', 'TIME VALUE OF MONEY', true) + '<main class="wrap">'
+      + '<section class="card"><h2>Fill in four, tap Solve on the fifth</h2>' + F.map(fieldHtml).join('')
+      + '<div class="grid2"><div class="f"><label for="t_ppy">Periods a year</label><select id="t_ppy" ' + selStyle + '>' + ppyOpts + '</select></div>'
+      + '<div class="f"><label>Payments at</label><div class="seg" style="margin:0"><button data-mode="end" aria-pressed="' + !st.begin + '">End</button><button data-mode="begin" aria-pressed="' + !!st.begin + '">Start</button></div></div></div>'
+      + '<div id="tvmOut" class="checks" style="background:var(--okbg);border-color:#BFE3D7;margin:6px 0 0" hidden></div>'
+      + '<div class="row" style="margin-top:10px"><button class="btn sm" id="tReset">Clear</button></div></section>'
+      + '<section class="card"><h2>Quick examples</h2><div class="row" style="flex-wrap:wrap">'
+      + '<button class="btn sm" data-ex="delay">Cost of delay</button><button class="btn sm" data-ex="goal">Savings goal</button><button class="btn sm" data-ex="grow">Lump sum growth</button></div>'
+      + '<p class="muted" style="margin-top:8px">Money paid out is minus, money received is plus, like a financial calculator. Illustration only: returns are not guaranteed.</p></section>'
+      + '</main>';
+    $('#back').onclick = home;
+    const read = () => { const o = {}; F.forEach(([k]) => o[k] = $('#t_' + k).value); o.ppy = +$('#t_ppy').value; o.begin = $('[data-mode="begin"]').getAttribute('aria-pressed') === 'true'; return o; };
+    const show = html => { const o = $('#tvmOut'); o.innerHTML = html; o.hidden = !html; };
+    app.oninput = () => calcSave('tvm', read());
+    $$('[data-mode]').forEach(b => b.onclick = () => { $$('[data-mode]').forEach(x => x.setAttribute('aria-pressed', x === b)); calcSave('tvm', read()); });
+    $('#t_ppy').onchange = () => calcSave('tvm', read());
+    const label = k => F.find(x => x[0] === k)[1];
+    $$('[data-solve]').forEach(b => b.onclick = () => {
+      const k = b.dataset.solve, o = read(), v = {};
+      for (const [f] of F) v[f] = numIn(o[f]);
+      for (const f of ['rate', 'n']) if (f !== k && v[f] === null) return show('<b style="color:var(--warn)">Fill in ' + esc(label(f)) + ' first.</b>');
+      const r = WIFCalc.solve(k, {pv: v.pv || 0, pmt: v.pmt || 0, fv: v.fv || 0, rate: v.rate, n: v.n, ppy: o.ppy, begin: o.begin});
+      if (!isFinite(r)) return show('<b style="color:var(--warn)">No answer fits these numbers.</b> Check the signs: money you pay in should be minus and money you get back plus.');
+      $('#t_' + k).value = fmt(r, k === 'rate' ? 4 : 2).replace(/,/g, '');
+      calcSave('tvm', read());
+      const per = {1: 'years', 2: 'half-years', 4: 'quarters', 12: 'months'}[o.ppy];
+      show(k === 'n' ? '<b>' + fmt(r, 2) + ' ' + per + '</b>' + (o.ppy !== 1 ? ' (' + fmt(r / o.ppy, 1) + ' years)' : '')
+        : k === 'rate' ? '<b>' + fmt(r, 2) + '% a year</b>' + (o.ppy !== 1 ? ' (' + fmt(r / o.ppy, 3) + '% a ' + per.replace(/s$/, '') + ')' : '')
+        : '<b>' + esc(label(k).replace(/ \(.*\)/, '')) + ': ' + flow(r) + '</b>');
+    });
+    $('#tReset').onclick = () => { F.forEach(([k]) => $('#t_' + k).value = ''); show(''); calcSave('tvm', read()); };
+    const EX = {
+      delay: {pv: '0', pmt: '-500', fv: '', rate: '6', n: '360', ppy: 12, begin: false, note: 'RM500 a month for 30 years at 6%: tap Solve on FV. Then change the periods to 300 (starting 5 years later) and solve again to see the cost of waiting.'},
+      goal: {pv: '0', pmt: '', fv: '500000', rate: '5', n: '240', ppy: 12, begin: false, note: 'RM500,000 in 20 years at 5%: tap Solve on PMT for the monthly saving needed.'},
+      grow: {pv: '-100000', pmt: '0', fv: '', rate: '5', n: '20', ppy: 1, begin: false, note: 'RM100,000 left for 20 years at 5%: tap Solve on FV.'}
+    };
+    $$('[data-ex]').forEach(b => b.onclick = () => {
+      const e = EX[b.dataset.ex];
+      F.forEach(([k]) => $('#t_' + k).value = e[k]); $('#t_ppy').value = e.ppy;
+      $$('[data-mode]').forEach(x => x.setAttribute('aria-pressed', (x.dataset.mode === 'begin') === e.begin));
+      calcSave('tvm', read()); show(esc(e.note)); scrollTo(0, 0);
+    });
+    scrollTo(0, 0);
+  }
+
+  function loanScreen(kind) {
+    kind = kind || calcLoad('loanKind', 'home'); calcSave('loanKind', kind);
+    location.hash = kind === 'car' ? 'loan-car' : 'loan'; app.oninput = null;
+    const H = calcLoad('home', {amt: '550000', rate: '3.6', years: '30', months: '', extra: ''});
+    const Cr = calcLoad('car', {price: '200000', down: '20000', rate: '2.7', years: '7', basis: 'flat'});
+    const inp = (id, label, val, mode, ph) => '<div class="f"><label for="' + id + '">' + label + '</label><input id="' + id + '" inputmode="' + (mode || 'decimal') + '" value="' + esc(val) + '"' + (ph ? ' placeholder="' + ph + '"' : '') + '></div>';
+    const form = kind === 'home'
+      ? '<section class="card"><h2>Home loan</h2>' + inp('h_amt', 'Loan amount (RM)', H.amt)
+        + '<div class="grid2">' + inp('h_rate', 'Interest (% a year)', H.rate) + inp('h_years', 'Years', H.years, 'numeric') + inp('h_months', '+ months', H.months, 'numeric', '0') + inp('h_extra', 'Extra each month (RM)', H.extra, 'decimal', '0') + '</div>'
+        + '<p class="muted">Malaysian home loans charge interest on the balance left (reducing balance), worked out monthly.</p></section>'
+      : '<section class="card"><h2>Car loan</h2><div class="grid2">' + inp('c_price', 'Car price (RM)', Cr.price) + inp('c_down', 'Down payment (RM)', Cr.down) + inp('c_rate', 'Interest (% a year)', Cr.rate) + inp('c_years', 'Years (1–9)', Cr.years, 'numeric') + '</div>'
+        + '<div class="f"><label for="c_basis">Interest type</label><select id="c_basis" ' + selStyle + '>'
+        + '<option value="flat"' + (Cr.basis !== 'reducing' ? ' selected' : '') + '>Flat rate (hire purchase)</option>'
+        + '<option value="reducing"' + (Cr.basis === 'reducing' ? ' selected' : '') + '>Reducing balance</option></select></div>'
+        + '<p class="muted">Malaysian car loans are usually hire purchase: interest is charged on the full amount for the whole term, so the true yearly cost is almost double the flat rate.</p></section>';
+    app.innerHTML = bar('Loan calculator', kind === 'car' ? 'CAR · HIRE PURCHASE' : 'HOME · REDUCING BALANCE', true) + '<main class="wrap">'
+      + '<div class="seg"><button data-k="home" aria-pressed="' + (kind === 'home') + '">Home loan</button><button data-k="car" aria-pressed="' + (kind === 'car') + '">Car loan</button></div>'
+      + form + '<div id="loanOut"></div><p class="disc">Estimates for discussion. The bank\'s own offer letter is the final figure.</p></main>';
+    $('#back').onclick = home;
+    $$('[data-k]').forEach(b => b.onclick = () => loanScreen(b.dataset.k));
+    const stat = (l, v) => '<div><span>' + l + '</span><b>' + v + '</b></div>';
+    const yrs = m => Math.floor(m / 12) + ' years' + (m % 12 ? ' ' + (m % 12) + ' months' : '');
+    const draw = () => {
+      const out = $('#loanOut');
+      if (kind === 'home') {
+        const o = {amt: $('#h_amt').value, rate: $('#h_rate').value, years: $('#h_years').value, months: $('#h_months').value, extra: $('#h_extra').value}; calcSave('home', o);
+        const P = numIn(o.amt), r = numIn(o.rate), n = (numIn(o.years) || 0) * 12 + (numIn(o.months) || 0), x = numIn(o.extra) || 0;
+        if (!(P > 0) || r === null || r < 0 || !(n > 0)) { out.innerHTML = '<p class="muted" style="padding:0 4px 12px">Fill in the loan amount, interest and years.</p>'; return; }
+        const a = WIFCalc.amortised(P, r, n, 0), b = x > 0 ? WIFCalc.amortised(P, r, n, x) : null;
+        out.innerHTML = '<section class="verdict ok"><div class="k">Monthly instalment</div><div class="v">' + money(a.monthly) + '</div>'
+          + '<div class="stats">' + stat('Total interest', money(a.totalInterest)) + stat('Total paid', money(a.totalPaid)) + stat('A year', money(a.annual)) + stat('Mortgage constant', fmt(a.constant * 100) + '%') + '</div>'
+          + (b ? '<p style="margin-top:10px">Paying <b>' + money(x) + '</b> extra a month (' + money(a.monthly + x) + ' in total) clears it in <b>' + yrs(b.months) + '</b> instead of ' + yrs(n) + ', and saves <b>' + money(a.totalInterest - b.totalInterest) + '</b> interest.</p>' : '')
+          + '</section><section class="card"><details><summary>Year-by-year balance</summary><div class="scroll"><table class="t"><thead><tr><th>Year</th><th>Interest</th><th>Principal</th><th>Balance</th></tr></thead><tbody>'
+          + (b || a).years.map(y => '<tr><td>' + y.year + '</td><td>' + money(y.interest) + '</td><td>' + money(y.principal) + '</td><td>' + money(y.balance) + '</td></tr>').join('')
+          + '</tbody></table></div>' + (b ? '<p class="note" style="margin-top:6px">With the extra payment.</p>' : '') + '</details></section>';
+      } else {
+        const o = {price: $('#c_price').value, down: $('#c_down').value, rate: $('#c_rate').value, years: $('#c_years').value, basis: $('#c_basis').value}; calcSave('car', o);
+        const price = numIn(o.price), down = numIn(o.down) || 0, r = numIn(o.rate), yr = numIn(o.years);
+        const P = (price || 0) - down, n = Math.round((yr || 0) * 12);
+        if (!(P > 0) || r === null || r < 0 || !(n > 0)) { out.innerHTML = '<p class="muted" style="padding:0 4px 12px">Fill in the car price, down payment, interest and years.</p>'; return; }
+        const hp = WIFCalc.hirePurchase(P, r, n), rb = WIFCalc.amortised(P, r, n, 0), flat = o.basis !== 'reducing';
+        const m = flat ? hp.monthly : rb.monthly, ti = flat ? hp.totalInterest : rb.totalInterest;
+        out.innerHTML = '<section class="verdict ok"><div class="k">Monthly instalment · ' + (flat ? 'flat rate' : 'reducing balance') + '</div><div class="v">' + money(m) + '</div>'
+          + '<div class="stats">' + stat('Loan amount', money(P)) + stat('Total interest', money(ti)) + stat('Total paid on loan', money(P + ti)) + stat('Down + loan', money(down + P + ti)) + '</div>'
+          + (flat ? '<p style="margin-top:10px">' + fmt(r) + '% flat is about <b>' + fmt(hp.effectiveRate) + '% a year</b> in true (effective) terms. At ' + fmt(r) + '% on a reducing balance the instalment would be ' + money(rb.monthly) + '.</p>'
+            : '<p style="margin-top:10px">Most Malaysian car loans are flat rate: at ' + fmt(r) + '% flat this loan would be ' + money(hp.monthly) + ' a month (' + money(hp.totalInterest) + ' interest).</p>')
+          + '</section>';
+      }
+    };
+    app.oninput = draw; if ($('#c_basis')) $('#c_basis').onchange = draw;
+    draw(); scrollTo(0, 0);
+  }
+
   window.addEventListener('popstate', () => { if (!location.hash) home(); });
   const h = location.hash.match(/q=([\w-]+)/);
-  if (h && byId(h[1])) openQuote(h[1]); else home();
+  if (location.hash === '#tvm') tvmScreen(); else if (location.hash.indexOf('#loan') === 0) loanScreen(location.hash === '#loan-car' ? 'car' : 'home');
+  else if (h && byId(h[1])) openQuote(h[1]); else home();
   if (KB && session()) syncKB();
 })();

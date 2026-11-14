@@ -131,3 +131,11 @@ details[open] summary::after{content:" ▴"}
 .spin{width:40px;height:40px;border:4px solid #E4E0D5;border-top-color:var(--gold);border-radius:50%;animation:sp 1s linear infinite;margin:16px auto}
 @keyframes sp{to{transform:rotate(360deg)}}
 .toast{position:fixed;left:50%;bottom:calc(30px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:60;background:var(--ink);color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;max-width:90%;box-shadow:0 6px 20px rgba(0,0,0,.2)}
+
+/* segmented switch (loan type, payment timing) */
+.seg{display:flex;gap:4px;padding:3px;background:#ECE9E1;border-radius:11px;margin-bottom:12px}
+.seg button{flex:1;min-height:38px;border-radius:9px;font-size:13px;font-weight:600;color:var(--muted)}
+.seg button[aria-pressed=true]{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+/* calculator answer */
+#tvmOut b{color:var(--ink);font-size:16px}
+#tvmOut b[style]{font-size:14px}
