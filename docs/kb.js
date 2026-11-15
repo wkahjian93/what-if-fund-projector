@@ -26,6 +26,14 @@
   }
   const rateOf = (row, g, s) => !row ? null : row.length === 1 ? row[0] : row.length === 2 ? row[g === 'F' ? 1 : 0] : row[COL(g, s)];
 
+  /* old rider codes (printed on older quotations) -> current codes, read from the rider names: "IL CIBR, old U100" */
+  function aliasOf(kb, code) {
+    const o = kb.other_riders && kb.other_riders.riders;
+    if (!o || o[code]) return code;
+    for (const [c, r] of Object.entries(o)) if (new RegExp('\\bold ' + code + '\\b').test(r.name || '')) return c;
+    return code;
+  }
+
   function findMedical(kb, code) {
     const mr = kb.medical_riders; if (!mr) return null;
     for (const [key, r] of Object.entries(mr.riders || {})) if ((r.codes || []).includes(code)) return Object.assign({key}, r);
@@ -44,7 +52,7 @@
     const g = pol.gender === 'F' ? 'F' : 'M', s = pol.smoker === 'Y' ? 'Y' : 'N', occ = String(pol.occ || '1');
     /* wealth plans: prevailing sum assured = X% of premiums paid so far; amount at risk measured against the IPA */
     const ps = prod.prevailing_sum_assured;
-    const prevailing = !!ps, riskIPA = (prod.accounts || []).includes('IPA');
+    const prevailing = !!ps, riskIPA = (prod.accounts || []).includes('IPA') && /TIV\s*\(IPA\)/.test(String(coi.net_sa || ''));
     const psaPct = ps ? (pol.entryAge <= 55 ? ps.x_pct_entry_le55 : ps.x_pct_entry_ge56) / 100 : 0;
     const premYearsPaid = y => Math.min(y, +pol.premiumYears || termYears);
     const bsa = +pol.bsa || 0;
@@ -58,7 +66,7 @@
 
     /* riders */
     const riders = (pol.riders || []).map(r => {
-      const code = String(r.code || '').toUpperCase().trim();
+      const code = aliasOf(kb, String(r.code || '').toUpperCase().trim());
       const med = findMedical(kb, code);
       if (med) return {code, kind: 'medical', med, years: +r.years || termYears};
       const d = kb.other_riders && kb.other_riders.riders[code];
@@ -71,7 +79,7 @@
       const anb = pol.entryAge + y - 1;
       const rBasic = rateOf(rowAt(table, anb), g, s) || 0;
       const waived = y <= (coi.waived_policy_years || 0);
-      let fixed = fee, q = 0;
+      let fixed = fee, q = 0, qr = 0;
       const basic = waived ? 0 : rBasic / 1000 * (1 - disc);
       if (netSA) q += basic; else fixed += basic * saAt(y);
       const part = {basic: netSA ? basic : basic * saAt(y), riders: {}};
@@ -95,7 +103,7 @@
             const rate = rateOf(rowAt(o.tables[d.table], anb), g, s);
             if (rate === null) continue;
             const sa = basis === 'PREMIUM' ? (r.sa || pol.premium || 0) : r.sa;
-            if (basis === 'RIDER_NET_SA') { q += bsa ? rate / 1000 * sa / bsa : 0; c = rate / 1000 * sa; }
+            if (basis === 'RIDER_NET_SA') { qr += bsa ? rate / 1000 * sa / bsa : 0; c = rate / 1000 * sa; }
             else if (basis === 'PREMIUM') { c = rate / 1000 * sa * annuity(Math.min(r.years, premYears) - y + 1, WAIVER_RATE); fixed += c; }
             else { c = rate / 1000 * sa; fixed += c; }
           } else if (basis === 'FLAT_OCC') {
@@ -109,12 +117,12 @@
         }
         part.riders[r.code] = c;
       }
-      years.push({fixed, q, sa: saAt(y)}); parts.push(part);
+      years.push({fixed, q, qr, sa: saAt(y)}); parts.push(part);
     }
     if (unknown.length) notes.push('Not in the GE rate tables: ' + unknown.join(', ') + '. Their charges come from the quotation only.');
     return {ok: true, product: prod, name: prod.name, years, parts, unknown, notes, netSA, prevailing, riskIPA, fundFmc: null};
   }
 
-  const api = {build, rowAt, rateOf, WAIVER_RATE};
+  const api = {build, rowAt, rateOf, aliasOf, WAIVER_RATE};
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.WIFKB = api;
 })(typeof self !== 'undefined' ? self : this);

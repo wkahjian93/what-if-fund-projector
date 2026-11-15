@@ -143,3 +143,11 @@ details[open] summary::after{content:" ▴"}
 /* REDEFINE logo */
 .bar .mark{height:30px;width:auto;flex:none;margin-left:2px}
 .footlogo{display:block;width:110px;height:auto;margin:22px auto 6px;opacity:.9}
+
+/* every-age cash value table */
+.agetable{max-height:62vh;overflow:auto;border:1px solid var(--line);border-radius:10px}
+.agetable thead th{position:sticky;top:0;background:#fff;z-index:1}
+.agetable thead th.u{background:#FBF5E6}
+.agetable tr.mile td{background:#F7F5EF;font-weight:600}
+.agetable tr.mile td.u{background:#F5EBD3}
+.agetable .yr{color:var(--muted);font-size:11px;font-weight:400}

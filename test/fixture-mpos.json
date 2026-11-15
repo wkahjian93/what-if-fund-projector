@@ -16,6 +16,9 @@
   "x": 72
  },
  "bonus": null,
+ "ipaBonus": null,
+ "boosters": null,
+ "guaranteed": null,
  "rows": [
   {
    "year": 1,
@@ -26,6 +29,8 @@
    "basicY": 121,
    "chargesX": 1224,
    "chargesY": 1224,
+   "fmcX": 4,
+   "fmcY": 4,
    "sa": 100000,
    "tivX": 1183,
    "tivY": 1200
@@ -39,6 +44,8 @@
    "basicY": 121,
    "chargesX": 1227,
    "chargesY": 1227,
+   "fmcX": 13,
+   "fmcY": 13,
    "sa": 101000,
    "tivX": 2376,
    "tivY": 2444
@@ -52,6 +59,8 @@
    "basicY": 121,
    "chargesX": 1229,
    "chargesY": 1229,
+   "fmcX": 22,
+   "fmcY": 22,
    "sa": 102000,
    "tivX": 3581,
    "tivY": 3734
@@ -65,6 +74,8 @@
    "basicY": 121,
    "chargesX": 1232,
    "chargesY": 1232,
+   "fmcX": 34,
+   "fmcY": 35,
    "sa": 103000,
    "tivX": 5600,
    "tivY": 5887
@@ -78,6 +89,8 @@
    "basicY": 121,
    "chargesX": 1236,
    "chargesY": 1236,
+   "fmcX": 49,
+   "fmcY": 51,
    "sa": 104000,
    "tivX": 7637,
    "tivY": 8119
@@ -91,6 +104,8 @@
    "basicY": 121,
    "chargesX": 1240,
    "chargesY": 1240,
+   "fmcX": 64,
+   "fmcY": 67,
    "sa": 105000,
    "tivX": 9692,
    "tivY": 10433
@@ -104,6 +119,8 @@
    "basicY": 121,
    "chargesX": 1248,
    "chargesY": 1248,
+   "fmcX": 82,
+   "fmcY": 86,
    "sa": 106000,
    "tivX": 12365,
    "tivY": 13440
@@ -117,6 +134,8 @@
    "basicY": 121,
    "chargesX": 1259,
    "chargesY": 1259,
+   "fmcX": 102,
+   "fmcY": 108,
    "sa": 107000,
    "tivX": 15056,
    "tivY": 16552
@@ -130,6 +149,8 @@
    "basicY": 121,
    "chargesX": 1270,
    "chargesY": 1270,
+   "fmcX": 122,
+   "fmcY": 132,
    "sa": 108000,
    "tivX": 17968,
    "tivY": 19977
@@ -143,6 +164,8 @@
    "basicY": 121,
    "chargesX": 1278,
    "chargesY": 1278,
+   "fmcX": 144,
+   "fmcY": 157,
    "sa": 109000,
    "tivX": 20902,
    "tivY": 23525
@@ -156,6 +179,8 @@
    "basicY": 163,
    "chargesX": 1462,
    "chargesY": 1462,
+   "fmcX": 252,
+   "fmcY": 294,
    "sa": 114000,
    "tivX": 35516,
    "tivY": 42848
@@ -169,6 +194,8 @@
    "basicY": 277,
    "chargesX": 1964,
    "chargesY": 1964,
+   "fmcX": 351,
+   "fmcY": 445,
    "sa": 119000,
    "tivX": 48749,
    "tivY": 63846
@@ -182,6 +209,8 @@
    "basicY": 810,
    "chargesX": 4156,
    "chargesY": 4156,
+   "fmcX": 468,
+   "fmcY": 739,
    "sa": 129000,
    "tivX": 63570,
    "tivY": 104461
@@ -195,6 +224,8 @@
    "basicY": 1935,
    "chargesX": 8266,
    "chargesY": 8266,
+   "fmcX": 361,
+   "fmcY": 906,
    "sa": 139000,
    "tivX": 47154,
    "tivY": 126213
@@ -208,6 +239,8 @@
    "basicY": 4180,
    "chargesX": 15689,
    "chargesY": 15689,
+   "fmcX": 0,
+   "fmcY": 587,
    "sa": 140000,
    "tivX": 0,
    "tivY": 77577
@@ -221,6 +254,8 @@
    "basicY": 0,
    "chargesX": 0,
    "chargesY": 0,
+   "fmcX": 0,
+   "fmcY": 0,
    "sa": 0,
    "tivX": 0,
    "tivY": 0
@@ -234,6 +269,8 @@
    "basicY": 0,
    "chargesX": 0,
    "chargesY": 0,
+   "fmcX": 0,
+   "fmcY": 0,
    "sa": 0,
    "tivX": 0,
    "tivY": 0
@@ -247,6 +284,8 @@
    "basicY": 0,
    "chargesX": 0,
    "chargesY": 0,
+   "fmcX": 0,
+   "fmcY": 0,
    "sa": 0,
    "tivX": 0,
    "tivY": 0

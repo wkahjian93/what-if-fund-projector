@@ -148,6 +148,32 @@ else {
   ok(S.call(Object.assign({op: 'login'}, T)).ok, 'server: existing sign-in still works');
 }
 
+// 8b. five more real quotations (15 Nov 2026): more plans, old rider codes, 20-pay, SGD-indexed, guaranteed + ILP
+{
+  const F = n => require('./' + n + '.json');
+  const spy10 = F('fixture-spy10'), srm20 = F('fixture-srm20'), spwp = F('fixture-spwp'), phg = F('fixture-phg'), gwe = F('fixture-gwe');
+  ok(srm20.rows.find(r => r.year === 9).alloc === 10000.2 && srm20.rows.find(r => r.year === 9).tivX === 58571, 'SRM 20-pay: rows where MPOS wraps "100.00%" onto its own line are read without shifting');
+  ok(phg.policy.bsa === 3344700 && phg.bonus && phg.bonus.amount === 120000 && phg.bonus.year === 10 && phg.bonus.every === 10, 'PHG: RM sum assured (SGD plan) and RM120,000 loyalty bonus every 10 years read');
+  ok(gwe.product === 'GREAT Wealth Enhancer' && gwe.boosters[1] === 4000 && gwe.boosters[11] === 8000 && gwe.guaranteed.maturity === 110002 && gwe.guaranteed.cashValue[2] === 4181, 'GWE: Investment Booster, guaranteed cash value and RM110,002 guaranteed maturity read');
+  ok(gwe.rates.x === 0.02 && gwe.premium === 20000.4, 'GWE: returns read from another page; yearly (not monthly) premium');
+  const e = (q, k) => W.calibrate(q, k || null);
+  const sp = e(spy10), sw = e(spwp), ph = e(phg), gw = e(gwe);
+  ok(sp.accuracy.maxErr < 0.005 && sp.accuracy.lapse.x.app === 68, 'SPY with 10 riders: within 0.5% and 2% run-out age 68');
+  ok(sw.accuracy.maxErr < 0.005 && sw.accuracy.lapse.x.app === 68 && sw.accuracy.lapse.y.app === 78, 'SPWP: within 0.5% and run-out ages 68 / 78');
+  ok(ph.accuracy.maxErr < 0.06 && ph.accuracy.lapse.x.app === 99 && ph.accuracy.lapse.y.app === 100, 'PHG: within 6% and run-out ages 99 / 100');
+  ok(gw.accuracy.maxErr < 0.002 && W.project(gw, 0.08).fullTerm, 'GWE: within 0.2% of every printed fund value');
+  if (kb) {
+    const KBM = require('../docs/kb.js');
+    ok(KBM.aliasOf(kb, 'U100') === 'U807' && KBM.aliasOf(kb, 'U102') === 'U809' && KBM.aliasOf(kb, 'U189') === 'U822' && KBM.aliasOf(kb, 'U72') === 'U801', 'old rider codes map to current ones (U100→U807, U102→U809, U189→U822, U72→U801)');
+    const spt = e(spy10, kb), swt = e(spwp, kb), s20 = e(srm20, kb), pht = e(phg, kb);
+    ok(spt.table && spt.table.maxDev < 0.01 && spt.accuracy.lapse.x.app === 68 && spt.accuracy.lapse.y.app === 75, 'SPY + 10 riders with GE tables: every printed charge within 1%, run-out ages 68 / 75');
+    ok(swt.table && swt.table.maxDev < 0.01 && swt.accuracy.lapse.y.app === 78, 'SPWP (old rider codes) with GE tables: charges within 1%, run-out 78');
+    ok(s20.accuracy.lapse.x.app === 64 && s20.accuracy.maxErr < 0.1, 'SRM 20-pay + CI Benefit Advance rider with GE tables: 2% run-out 64, within 10%');
+    ok(pht.accuracy.lapse.x.app === 99 && pht.accuracy.maxErr < 0.05, 'PHG with GE tables: run-out 99, within 5%');
+    ok(!e(gwe, kb).table && !(e(gwe, kb).tableNotes || []).length, 'GWE: no insurance charges, so no rate-table note');
+  }
+}
+
 // 9. calculators: TVM and loans, against known answers
 {
   const C = require('../docs/calc.js'), near = (a, b, d) => Math.abs(a - b) <= d;

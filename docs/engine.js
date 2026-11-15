@@ -61,7 +61,7 @@
   function normRows(q) {
     return (q.rows || []).map(r => {
       const o = {year: num(r.year), age: num(r.age), premium: num(r.premium), alloc: num(r.alloc), sa: num(r.sa),
-        tivX: num(r.tivX), tivY: num(r.tivY), basicX: num(r.basicX), basicY: num(r.basicY),
+        tivX: num(r.tivX), tivY: num(r.tivY), basicX: num(r.basicX), basicY: num(r.basicY), fmcX: num(r.fmcX), fmcY: num(r.fmcY),
         chargesX: num(r.chargesX), chargesY: num(r.chargesY), suppX: num(r.suppX), suppY: num(r.suppY),
         ipaX: num(r.ipaX), ipaY: num(r.ipaY), tupaX: num(r.tupaX), tupaY: num(r.tupaY)};
       if (o.chargesX === null && o.chargesY === null && num(r.charges) !== null) o.chargesX = o.chargesY = num(r.charges);
@@ -102,26 +102,29 @@
   }
 
   /* Turn each printed row into {fixed, q}. */
-  function rowCosts(rows, level, riskIPA) {
+  function rowCosts(rows, level, riskIPA, bonusAt) {
     const byYear = {}; rows.forEach(r => byYear[r.year] = r);
     return rows.map(r => {
       if (!level) return {fixed: Math.max(r.chargesX || 0, r.chargesY || 0), q: 0};
       const prev = r.year === 1 ? {tivX: 0, tivY: 0} : byYear[r.year - 1];
-      const qs = [], fixeds = [];
+      const qs = [], fixeds = [], fpairs = [];
       for (const k of ['X', 'Y']) {
         const acct = riskIPA && r['ipa' + k] !== null ? 'ipa' : 'tiv';
         const ch = r['charges' + k], F1 = r[acct + k];
         if (!(ch > 0) || !(r['tiv' + k] > 0)) continue;
-        const Fbar = prev && prev[acct + k] !== null && prev[acct + k] !== undefined ? (prev[acct + k] + F1) / 2 : F1;
+        /* a fixed bonus credited at this year's end is in the printed year-end value but was not there while the year's
+           charges were taken */
+        const endB = acct === 'tiv' && bonusAt ? bonusAt(r.year) : 0;
+        const Fbar = prev && prev[acct + k] !== null && prev[acct + k] !== undefined ? (prev[acct + k] + F1 - endB) / 2 : F1 - endB;
         const atRisk = r.sa - Fbar;
         const basic = r['basic' + k];
         if (basic === null || basic === undefined) continue;
-        fixeds.push(ch - basic);
+        fixeds.push(ch - basic); fpairs.push([ch - basic, Fbar]);
         /* no insurance charge because the fund is above the sum assured: nothing at risk, which says nothing about the rate */
         if (basic > 0 && atRisk > Math.max(1000, r.sa * 0.02)) qs.push(basic / atRisk);
       }
       if (!qs.length && fixeds.length) // the rate cannot be read from this row: filled in later from neighbours or GE's tables
-        return {fixed: Math.max(0, Math.min(...fixeds)), q: null, qUnknown: true};
+        return {fixed: Math.max(0, Math.min(...fixeds)), q: null, qUnknown: true, fpairs};
       if (!qs.length) { // no split given: use the X / Y difference
         const FX = r.tivX, FY = r.tivY;
         if (r.chargesX > 0 && r.chargesY > 0 && FY - FX > 2000) {
@@ -131,12 +134,12 @@
         const ch = Math.max(r.chargesX || 0, r.chargesY || 0), F = r.chargesY >= r.chargesX ? r.tivY : r.tivX;
         return {fixed: 0, q: ch > 0 ? ch / Math.max(r.sa - (F || 0), 1) : 0, rough: true};
       }
-      return {fixed: Math.max(0, fixeds.reduce((a, b) => a + b, 0) / fixeds.length), q: qs.reduce((a, b) => a + b, 0) / qs.length};
+      return {fixed: Math.max(0, fixeds.reduce((a, b) => a + b, 0) / fixeds.length), q: qs.reduce((a, b) => a + b, 0) / qs.length, fpairs};
     });
   }
 
   /* Fit tax and fund charge on consecutive years. */
-  function fitCosts(rows, costs, rates, bonusAt, extra) {
+  function fitCosts(rows, costs, rates, bonusAt, extra, level, useLongs) {
     const pairs = [], byYear = {};
     rows.forEach((r, i) => byYear[r.year] = i);
     rows.forEach((r, i) => {
@@ -150,17 +153,56 @@
         pairs.push([S0, Object.assign({}, pl, {supp: (pl.suppK || {})[K] || 0}), rate, r[k]]);
       }
     });
-    if (pairs.length < 4) return {tax: 0.08, fmc: 0.0075, fitted: false, pairs: pairs.length};
-    const err = (tax, fmc) => { let e = 0; for (const [F0, pl, r, F1] of pairs) { const s = yearStep(F0, pl, r, {tax, fmc}); const d = (s.F - F1) / Math.max(F1, 500); e += d * d; } return e; };
+    /* the quotation prints the fund management charge in RM: that pins the charge rate down, so only the tax is left to fit */
+    const fm = [];
+    rows.forEach(r => {
+      const prev = rows[byYear[r.year - 1]];
+      if (!prev || r.year < 2) return;
+      for (const K of ['X', 'Y']) { const a = prev['tiv' + K], b = r['tiv' + K], c = r['fmc' + K]; if (a > 0 && b > 0 && c > 0) fm.push([c, (a + b) / 2]); }
+    });
+    const fmcPrinted = fm.length >= 3 ? fm.reduce((x, [c]) => x + c, 0) / fm.reduce((x, [, f]) => x + f, 0) : null;
+    if (pairs.length < 4) return {tax: 0.08, fmc: fmcPrinted || 0.0075, fitted: false, pairs: pairs.length, fmcPrinted};
+    /* long stretches between printed years where a fund is above the sum assured: nothing is at risk, so only the fixed
+       charges, bonuses and growth act. These pin the growth (tax and fund charge) down over decades. */
+    const longs = [];
+    for (let i = 1; i < rows.length; i++) {
+      const a = rows[i - 1], b = rows[i], ca = costs[i - 1], cb = costs[i];
+      if (!useLongs || !level || b.year - a.year < 2 || !(a.sa > 0)) continue; // only where the fund reduces the insurance charge
+      for (const [K, rate] of [['X', rates.x], ['Y', rates.y]]) {
+        const ea = extra(a.year + 1) || {}, acct = ea.riskIPA && a['ipa' + K] !== null && a['ipa' + K] !== undefined ? 'ipa' : 'tiv';
+        if (!(a[acct + K] >= a.sa * 1.02 && b[acct + K] >= (b.sa || a.sa) * 1.02 && b['tiv' + K] > 0)) continue;
+        const pls = [];
+        for (let y = a.year + 1; y <= b.year; y++) {
+          const t = (y - a.year) / (b.year - a.year);
+          pls.push(Object.assign({alloc: y === b.year ? b.alloc : Math.min(a.alloc, b.alloc), fixed: ca.fixed + (cb.fixed - ca.fixed) * t, q: 0, sa: a.sa, bonus: bonusAt(y)}, extra(y), {supp: 0}));
+        }
+        const S0 = a['ipa' + K] !== null && a['ipa' + K] !== undefined ? {ipa: a['ipa' + K], tupa: a['tupa' + K] || 0} : a['tiv' + K];
+        longs.push([S0, pls, rate, b['tiv' + K]]);
+      }
+    }
+    const err = (tax, fmc) => {
+      let e = 0;
+      for (const [F0, pl, r, F1] of pairs) { const s = yearStep(F0, pl, r, {tax, fmc}); const d = (s.F - F1) / Math.max(F1, 500); e += d * d; }
+      for (const [F0, pls, r, F1] of longs) {
+        let S = F0, tot = 0;
+        for (const pl of pls) { const s = yearStep(S, pl, r, {tax, fmc}); S = s.S; tot = s.F; if (s.lapsed) break; }
+        const d = (tot - F1) / Math.max(F1, 500); e += d * d;
+      }
+      return e;
+    };
     let best = [0.08, 0.0075, Infinity];
-    for (let t = 0; t <= 0.25001; t += 0.01) for (let f = 0; f <= 0.03001; f += 0.0005) { const e = err(t, f); if (e < best[2]) best = [t, f, e]; }
+    /* plans with a supplementary charge (wealth plans): in the early years it overlaps the fund charge, so the fit cannot
+       tell them apart. There the fund charge comes from the printed RM amounts (x 1.03: the simple yearly average used for
+       it runs about 3% low on every plan where the fit is reliable) and only the tax is fitted. */
+    const hasSupp = pairs.some(p => p[1].supp > 0), pin = hasSupp && fmcPrinted ? fmcPrinted * 1.03 : null;
+    for (let t = 0; t <= 0.25001; t += 0.01) for (let f = pin || 0; f <= (pin || 0.03001); f += pin ? 1 : 0.0005) { const e = err(t, f); if (e < best[2]) best = [t, f, e]; }
     for (const step of [0.004, 0.001, 0.0003]) {
       const [t0, f0] = best;
       for (let t = t0 - step * 3; t <= t0 + step * 3; t += step) for (let f = f0 - step; f <= f0 + step; f += step / 4) {
-        if (t < 0 || f < 0) continue; const e = err(t, f); if (e < best[2]) best = [t, f, e];
+        if (t < 0 || f < 0 || (pin && f !== best[1])) continue; const e = err(t, f); if (e < best[2]) best = [t, f, e];
       }
     }
-    return {tax: best[0], fmc: best[1], fitted: true, pairs: pairs.length, rms: Math.sqrt(best[2] / pairs.length)};
+    return {tax: best[0], fmc: best[1], fitted: true, pairs: pairs.length, rms: Math.sqrt(best[2] / pairs.length), fmcPrinted};
   }
 
   function runPlan(plan, termYears, r, p) {
@@ -175,7 +217,8 @@
     return {years, lapseYear: null};
   }
 
-  function calibrate(q, kb) {
+  function calibrateOnce(q, kb, opt) {
+    opt = opt || {};
     const chk = check(q);
     if (chk.problems.length) return {ok: false, problems: chk.problems, warnings: chk.warnings};
     const rates = {x: +q.rates.x, y: +q.rates.y};
@@ -191,6 +234,7 @@
     if (kb && q.policy && q.policy.code && KBM) {
       const t = KBM.build(kb, Object.assign({}, q.policy, {entryAge, premium: num(q.policy.premium) || num(q.premium)}), termYears);
       if (t.ok) tab = t; tabNotes = t.notes || [];
+      if (rows.every(r => !(r.chargesX > 0) && !(r.chargesY > 0))) { tab = null; tabNotes = []; } // no insurance charges at all: nothing for the tables to add
     }
     const level = tab ? tab.netSA : chk.level;
     /* wealth plans: the amount at risk is measured against the IPA only */
@@ -199,7 +243,12 @@
        the prevailing sum assured, which is the right base already */
     const bsa = tab && !tab.prevailing && tab.years[0].sa ? tab.years[0].sa : null;
     const costRows = bsa && level ? rows.map(r => Object.assign({}, r, {sa: bsa})) : rows;
-    const costs = rowCosts(costRows, level, riskIPA);
+    /* bonus / booster: by age next birthday (anniversary of age N) or by policy year (end of year N), optionally every M years */
+    const b = q.bonus && num(q.bonus.amount) > 0 && (num(q.bonus.age) > 0 || num(q.bonus.year) > 0) ? q.bonus : null;
+    /* plus yearly credits printed per policy year (e.g. GREAT Wealth Enhancer's Investment Booster) */
+    const yearly = q.boosters || {};
+    const bonusAt = y => (num(yearly[y]) || 0) + (!b ? 0 : (k => k === 0 || (k > 0 && num(b.every) > 0 && k % b.every === 0) ? +b.amount : 0)(num(b.year) > 0 ? y - b.year : entryAge + y - b.age));
+    const costs = rowCosts(costRows, level, riskIPA, bonusAt);
     /* rows whose insurance rate cannot be read: GE's tables when loaded, otherwise the neighbouring printed rates
        (geometric in between, the GE age pace after the last one) */
     {
@@ -252,10 +301,8 @@
     };
     const extra = y => ({riskIPA, loy: loyAt(y), suppK: suppK[y] || {}});
     /* bonus / booster credited into the fund at the policy anniversary of the stated age (age next birthday) */
-    const b = q.bonus && num(q.bonus.amount) > 0 && num(q.bonus.age) > 0 ? q.bonus : null;
-    const bonusAt = y => { if (!b) return 0; const age = entryAge + y, k = age - b.age; return k === 0 || (k > 0 && num(b.every) > 0 && k % b.every === 0) ? +b.amount : 0; };
-    let fit = fitCosts(rows, costs, rates, bonusAt, extra);
-    if (Object.keys(suppK).length) { suppK = suppPcts({tax: fit.tax, fmc: fit.fmc}); fit = fitCosts(rows, costs, rates, bonusAt, extra); }
+    let fit = fitCosts(rows, costs, rates, bonusAt, extra, level, opt.useLongs);
+    if (Object.keys(suppK).length) { suppK = suppPcts({tax: fit.tax, fmc: fit.fmc}); fit = fitCosts(rows, costs, rates, bonusAt, extra, level, opt.useLongs); }
     const p = {tax: fit.tax, fmc: fit.fmc};
 
     const plan = {};
@@ -374,7 +421,9 @@
       const rf = [], rq = [];
       rows.forEach((r, i) => {
         const t = tab.years[r.year - 1]; if (!t) return;
-        if (t.fixed > 0 && costs[i].fixed > 0) rf.push([r.year, costs[i].fixed / t.fixed]);
+        const fp = costs[i].fpairs && costs[i].fpairs.length ? costs[i].fpairs : [[costs[i].fixed, null]];
+        const expect = fp.reduce((a, [, fb]) => a + t.fixed + (t.qr || 0) * Math.max(t.sa - (fb === null ? 0 : fb), 0), 0), got = fp.reduce((a, [f]) => a + f, 0);
+        if (expect > 0 && got > 0) rf.push([r.year, got / expect]);
         if (t.q > 0 && costs[i].q > 0 && !costs[i].rough && !costs[i].qUnknown) rq.push([r.year, costs[i].q / t.q]);
       });
       const interp = (list, y) => {
@@ -391,8 +440,13 @@
       };
       for (let y = 1; y <= termYears; y++) {
         const t = tab.years[y - 1];
-        if (plan[y] && plan[y].src === 'quote') { const ci = rows.findIndex(r => r.year === y); if (ci >= 0 && costs[ci].qUnknown) plan[y].q = t.q * interp(rq, y); continue; }
-        plan[y] = {alloc: allocAt(y), fixed: t.fixed * interp(rf, y), q: t.q * interp(rq, y), sa: t.sa, src: y > last.year ? 'after' : 'between', bonus: bonusAt(y), loy: loyAt(y), supp: suppAt(y), riskIPA};
+        if (plan[y] && plan[y].src === 'quote') {
+          const ci = rows.findIndex(r => r.year === y);
+          if (ci >= 0 && costs[ci].qUnknown) plan[y].q = t.q * interp(rq, y);
+          if (t.qr) { plan[y].fixed = t.fixed * interp(rf, y); plan[y].q += t.qr * interp(rf, y); } // fund-dependent riders move with the fund
+          continue;
+        }
+        plan[y] = {alloc: allocAt(y), fixed: t.fixed * interp(rf, y), q: t.q * interp(rq, y) + (t.qr || 0) * interp(rf, y), sa: t.sa, src: y > last.year ? 'after' : 'between', bonus: bonusAt(y), loy: loyAt(y), supp: suppAt(y), riskIPA};
       }
       planTrend = plan;
       const dev = rf.concat(tab.prevailing ? rq.filter(([y]) => y > (+(q.policy || {}).premiumYears || 0) + 1) : rq).map(([, r]) => Math.abs(r - 1));
@@ -408,6 +462,17 @@
     model.growth.total = last.year < termYears && mid ? Math.pow((mid.fixed + mid.q * lastSA * 0.9) / Math.max(1, cl.fixed + cl.q * lastSA * 0.9), 1 / Math.min(5, termYears - last.year)) : 1;
     model.accuracy = accuracy(model);
     return model;
+  }
+
+  /* Two ways of fitting growth (with or without the long stretches where a fund has nothing at risk); keep whichever
+     reproduces the quotation's own printed values and run-out ages better. */
+  function calibrate(q, kb) {
+    const a = calibrateOnce(q, kb, {useLongs: false});
+    if (!a.ok || !a.level) return a;
+    const b = calibrateOnce(q, kb, {useLongs: true});
+    if (!b.ok) return a;
+    const score = m => m.accuracy.maxErr + (m.accuracy.lapseMatch ? 0 : 0.5) + ['x', 'y'].reduce((t, k) => { const l = m.accuracy.lapse[k]; return t + (l.ge === null ? 0 : Math.abs(l.ge - l.app) * 0.01); }, 0);
+    return score(b) < score(a) ? b : a;
   }
 
   function project(model, r, trend) {

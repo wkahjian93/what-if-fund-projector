@@ -1,5 +1,5 @@
 // Network first and always revalidated, so phones get updates as soon as they are online; falls back to the cache offline.
-const CACHE = 'wif-v9';
+const CACHE = 'wif-v10';
 const FILES = ['./', 'index.html', 'style.css', 'config.js', 'engine.js', 'kb.js', 'parse.js', 'calc.js', 'sample.js', 'app.js', 'manifest.webmanifest', 'logo.png', 'logo-mark.png',
   'vendor/pdf.min.js', 'vendor/pdf.worker.min.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); });

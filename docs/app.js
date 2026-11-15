@@ -6,6 +6,7 @@
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
   const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } };
   const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+  const num0 = v => (v === null || v === undefined || !isFinite(+v)) ? 0 : +v;
   const rm = v => 'RM' + Math.round(v).toLocaleString('en-MY');
   const pct = v => (Math.round(v * 10000) / 100).toFixed(v * 100 % 1 ? 2 : 0).replace(/\.?0+$/, '') + '%';
   const pct1 = v => (v * 100).toFixed(1) + '%';
@@ -438,9 +439,12 @@
     const px = WIF.project(model, model.rates.x), py = WIF.project(model, model.rates.y);
     const need = WIF.minReturn(model), needT = WIF.minReturn(model, null, true);
     const acc = model.accuracy;
+    /* every age from the client's entry age to policy expiry */
     const ages = [];
-    for (let a = Math.ceil((model.entryAge + 1) / 5) * 5; a <= endAge; a += 5) if (a >= model.entryAge + 4) ages.push(a);
-    if (ages[ages.length - 1] !== endAge) ages.push(endAge);
+    for (let a = model.entryAge + 1; a <= endAge; a++) ages.push(a);
+    /* plans with a guaranteed part (e.g. GREAT Wealth Enhancer): cash value = guaranteed cash value + fund value */
+    const G = d.guaranteed && d.guaranteed.cashValue ? d.guaranteed : null;
+    const gcvAt = a => { if (!G) return 0; const y = a - model.entryAge; return num0(G.cashValue[y]) || (y === model.termYears ? num0(G.maturity) : 0); };
     app.innerHTML = bar(d.product, `AGE ${model.entryAge} · ${d.premium ? rm(d.premium) + ' A YEAR · ' : ''}COVER TO AGE ${endAge}`, true) + `<main class="wrap">
       <section class="card"><h2>Your assumed fund return</h2>
         <div class="rate"><button class="step" id="minus" aria-label="Lower">−</button>
@@ -450,8 +454,9 @@
         <div class="chips">${[2, 4, 5, 6, 8, 10].map(v => `<button data-r="${v}">${v}%</button>`).join('')}</div>
       </section>
       <div id="out"></div>
-      <section class="card"><h2>Fund value (cash value) by age</h2>
-        <div class="scroll"><table class="t"><thead><tr><th>Age</th><th>${pct(model.rates.x)} (GE X)</th><th>${pct(model.rates.y)} (GE Y)</th><th class="u" id="thU"></th></tr></thead><tbody id="tbl"></tbody></table></div>
+      <section class="card"><h2>${G ? 'Cash value (guaranteed + fund) by age' : 'Fund value (cash value) by age'}</h2>
+        <p class="note" style="margin-bottom:6px">Every year from entry age ${model.entryAge} to expiry at age ${endAge}.${G ? ' Includes the guaranteed cash value; at maturity the guaranteed amount is ' + rm(num0(G.maturity)) + '.' : ''}</p>
+        <div class="scroll agetable"><table class="t"><thead><tr><th>Age · yr</th><th>${pct(model.rates.x)} (GE X)</th><th>${pct(model.rates.y)} (GE Y)</th><th class="u" id="thU"></th></tr></thead><tbody id="tbl"></tbody></table></div>
         <p class="note" style="margin-top:8px"><span class="est">≈</span> = after the last age printed in the quotation (age ${model.entryAge + model.lastDataYear}); ${model.table ? 'charges there come from GE\'s rate tables' : 'charges there are estimated'}.</p>
       </section>
       <section class="card"><h2>Fund value over time</h2><div id="chart"></div>
@@ -505,6 +510,7 @@
         <div class="k">At ${pct(r)} a year</div>
         <div class="v">${lapsedEarly ? `Fund runs out after age ${pu.sustainsToAge}` : `Lasts to age ${endAge}, the full term`}</div>
         ${range ? `<p style="font-weight:600;margin-bottom:6px">Range: age ${pu.sustainsToAge} to ${pt.fullTerm ? endAge + ' (full term)' : pt.sustainsToAge}. The later age applies if charges after age ${model.anchorAge - 1} rise at the printed pace, not the faster pace GE's figures need up to then.</p>` : ''}
+        ${G && !lapsedEarly ? `<p style="font-weight:600;margin-bottom:6px">At maturity (age ${endAge}): guaranteed ${rm(num0(G.maturity))} + fund ${rm(pu.years[pu.years.length - 1].fund)} = <b>${rm(num0(G.maturity) + pu.years[pu.years.length - 1].fund)}</b>.</p>` : ''}
         <p>${lapsedEarly ? `That is ${endAge - pu.sustainsToAge} years before cover ends at ${endAge}. To keep it going, the client would need to top up, raise the premium or lower the cover.` : `The fund still has ${rm(pu.years[pu.years.length - 1].fund)} at age ${endAge}.`}
           ${need !== null ? ` It needs about <b>${pct1(need)}</b> a year to last to age ${endAge}${needT !== null && Math.abs(needT - need) > 0.001 ? ` (${pct1(needT)} at the printed pace)` : ''}.` : ''}</p>
         <div class="stats">
@@ -514,8 +520,8 @@
           <div><span>GE ${pct(model.rates.y)}: lasts to</span><b>age ${py.sustainsToAge}${py.fullTerm ? ' ✓' : ''}</b></div>
         </div></section>`;
       $('#thU').textContent = pct(r) + ' (yours)'; $('#lgU').textContent = pct(r) + ' (yours)';
-      const cell = (p, a) => { const v = p.fundAt(a); return v === null ? '–' : v === 0 && (!p.fullTerm && a > p.sustainsToAge) ? '<span style="color:var(--err)">Ran out</span>' : rm(v); };
-      $('#tbl').innerHTML = ages.map(a => `<tr><td>${a}${a > model.entryAge + model.lastDataYear ? ' <span class="est">≈</span>' : ''}</td><td>${cell(px, a)}</td><td>${cell(py, a)}</td><td class="u">${cell(pu, a)}</td></tr>`).join('');
+      const cell = (p, a) => { const v = p.fundAt(a); return v === null ? '–' : v === 0 && (!p.fullTerm && a > p.sustainsToAge) ? '<span style="color:var(--err)">Ran out</span>' : rm(v + gcvAt(a)); };
+      $('#tbl').innerHTML = ages.map(a => `<tr${(a - model.entryAge) % 5 === 0 ? ' class="mile"' : ''}><td>${a}<span class="yr"> · ${a - model.entryAge}</span>${a > model.entryAge + model.lastDataYear ? ' <span class="est">≈</span>' : ''}</td><td>${cell(px, a)}</td><td>${cell(py, a)}</td><td class="u">${cell(pu, a)}</td></tr>`).join('');
       chart(pu);
     }
     function chart(pu) {
